@@ -10,6 +10,7 @@ local DEFAULT_BOOTSTRAP_TEMP_DIR = "/sgc/tmp/bootstrap"
 local DEFAULT_BOOTSTRAP_HOST = "127.0.0.1"
 local DEFAULT_BOOTSTRAP_PORT = 8090
 local DEFAULT_BOOTSTRAP_CHANNEL = "stable"
+local CURRENT_ENV = _ENV
 
 local ROLE_ORDER = {
     "site_controller",
@@ -38,6 +39,119 @@ local ROLE_SET = {
     update_client = true,
     bridge = true,
 }
+
+local function ensure_package_system()
+    if type(package) ~= "table" then
+        package = {}
+    end
+
+    if type(package.path) ~= "string" or package.path == "" then
+        package.path = "?.lua;?/init.lua"
+    end
+
+    if type(package.loaded) ~= "table" then
+        package.loaded = {}
+    end
+
+    if type(require) == "function" then
+        return
+    end
+
+    ---@param module_name string
+    ---@return string?
+    local function resolve_module_path(module_name)
+        local normalized_name = module_name:gsub("%.", "/")
+        for template in string.gmatch(package.path, "[^;]+") do
+            local candidate = template:gsub("%?", normalized_name)
+            if path_exists(candidate) then
+                return candidate
+            end
+        end
+
+        return nil
+    end
+
+    ---@param module_name string
+    ---@return any
+    function require(module_name)
+        local loaded = package.loaded[module_name]
+        if loaded ~= nil then
+            return loaded
+        end
+
+        local module_path = resolve_module_path(module_name)
+        if module_path == nil then
+            error("module not found: " .. module_name, 2)
+        end
+
+        if type(loadfile) == "function" then
+            local module_env = setmetatable({
+                require = require,
+                package = package,
+            }, {
+                __index = CURRENT_ENV,
+            })
+
+            local chunk, load_error = loadfile(module_path, nil, module_env)
+            if chunk == nil then
+                error(load_error or ("unable to load module: " .. module_name), 2)
+            end
+
+            package.loaded[module_name] = true
+            local value = chunk()
+            if value == nil then
+                value = true
+            end
+            package.loaded[module_name] = value
+            return value
+        end
+
+        package.loaded[module_name] = true
+        local ok, value = pcall(dofile, module_path)
+        if not ok then
+            package.loaded[module_name] = nil
+            error(value, 2)
+        end
+
+        if value == nil then
+            value = true
+        end
+        package.loaded[module_name] = value
+        return value
+    end
+end
+
+---@param path string
+---@return any, string?
+local function load_module_chunk(path)
+    if type(loadfile) == "function" then
+        local env = setmetatable({
+            require = require,
+            package = package,
+        }, {
+            __index = CURRENT_ENV,
+        })
+
+        local chunk, load_error = loadfile(path, nil, env)
+        if chunk == nil then
+            return nil, load_error
+        end
+
+        local ok, value = pcall(chunk)
+        if not ok then
+            return nil, tostring(value)
+        end
+
+        return value, nil
+    end
+
+    local ok, value = pcall(dofile, path)
+    if not ok then
+        return nil, tostring(value)
+    end
+
+    return value, nil
+end
 
 ---@param entry string
 local function prepend_package_path(entry)
@@ -810,19 +924,29 @@ end
 
 ---@return boolean
 local function run_installed_startup()
+    ensure_package_system()
     prepend_package_path("src/?/init.lua")
     prepend_package_path("src/?.lua")
 
     while true do
-        local ok, startup_module = pcall(dofile, "src/startup.lua")
-        if ok and type(startup_module) == "table" and type(startup_module.run) == "function" then
-            return startup_module.run()
-        end
+        if shell ~= nil and type(shell.run) == "function" and path_exists("src/boot.lua") then
+            local ok = shell.run("src/boot.lua")
+            if ok then
+                return true
+            end
 
-        local failure_message = ok
-            and "boot failed: startup module did not expose run()"
-            or "boot failed: " .. tostring(startup_module)
-        print_error(failure_message)
+            print_error("boot failed: src/boot.lua did not run successfully")
+        else
+        local startup_module, load_error = load_module_chunk("src/startup.lua")
+            if startup_module ~= nil and type(startup_module) == "table" and type(startup_module.run) == "function" then
+                return startup_module.run()
+            end
+
+            local failure_message = startup_module ~= nil
+                and "boot failed: startup module did not expose run()"
+                or "boot failed: " .. tostring(load_error)
+            print_error(failure_message)
+        end
 
         if not read_yes_no("Reinstall runtime from mirror", true) then
             return false
