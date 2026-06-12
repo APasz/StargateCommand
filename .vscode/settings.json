@@ -1,0 +1,39 @@
+{
+    "Lua.runtime.version": "Lua 5.2",
+    "Lua.workspace.checkThirdParty": false,
+    "Lua.diagnostics.globals": [
+        "colors",
+        "colours",
+        "commands",
+        "disk",
+        "gps",
+        "help",
+        "http",
+        "keys",
+        "multishell",
+        "paintutils",
+        "parallel",
+        "peripheral",
+        "rednet",
+        "redstone",
+        "rs",
+        "settings",
+        "shell",
+        "term",
+        "textutils",
+        "turtle",
+        "window"
+    ],
+    "Lua.workspace.library": [
+        "${workspaceFolder}/src/types",
+        "${workspaceFolder}/.lua_ls/cc-tweaked-library"
+    ],
+    "editor.formatOnSave": true,
+    "[lua]": {
+        "editor.defaultFormatter": "JohnnyMorganz.stylua"
+    },
+    "[teal]": {
+        "editor.formatOnSave": false
+    },
+    "python.languageServer": "None"
+}

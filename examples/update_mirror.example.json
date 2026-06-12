@@ -1,0 +1,33 @@
+{
+  "schema": 1,
+  "bind": "127.0.0.1",
+  "port": 8080,
+  "snapshot_root": "../dist/update_mirror",
+  "deploy_manifest": "../tools/deploy_manifest.txt",
+  "channels": [
+    {
+      "name": "stable",
+      "source": {
+        "kind": "git_remote",
+        "remote": "https://github.com/your-org/StargateCommand.git",
+        "ref": "main"
+      }
+    },
+    {
+      "name": "testing",
+      "source": {
+        "kind": "git_remote",
+        "remote": "git@github.com:your-org/StargateCommand-testing.git",
+        "ref": "main"
+      }
+    },
+    {
+      "name": "dev",
+      "source": {
+        "kind": "workspace",
+        "root": "..",
+        "revision_mode": "git_head"
+      }
+    }
+  ]
+}

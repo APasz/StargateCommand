@@ -1,0 +1,4 @@
+# Files and directories that are deployed to ComputerCraft machines.
+# Machine-local config and world-local data are intentionally excluded.
+startup.lua
+src/

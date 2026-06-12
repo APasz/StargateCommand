@@ -1,0 +1,38 @@
+{
+    "runtime.version": "Lua 5.2",
+    "runtime.path": [
+        "?.lua",
+        "?/init.lua",
+        "src/?.lua",
+        "src/?/init.lua"
+    ],
+    "workspace.library": [
+        "${workspaceFolder}/src/types",
+        "${workspaceFolder}/.lua_ls/cc-tweaked-library"
+    ],
+    "workspace.checkThirdParty": false,
+    "diagnostics.globals": [
+        "colors",
+        "colours",
+        "commands",
+        "disk",
+        "gps",
+        "help",
+        "http",
+        "keys",
+        "multishell",
+        "paintutils",
+        "parallel",
+        "peripheral",
+        "rednet",
+        "redstone",
+        "rs",
+        "settings",
+        "shell",
+        "term",
+        "textutils",
+        "turtle",
+        "window"
+    ],
+    "telemetry.enable": false
+}

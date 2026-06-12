@@ -1,0 +1,7 @@
+.DS_Store
+.lua_ls/
+dist/
+tmp/
+*.pyc
+
+update_mirror.json
