@@ -84,44 +84,114 @@ The repo also ships lightweight local type annotations in `src/types/`.
 
 ## Manual Installation
 
-Early testing is expected to be manual:
+This section is the simplest end-to-end path for getting one machine running with the updater enabled.
 
-1. Copy the repository files onto a ComputerCraft computer.
-2. Copy one of the example configs to `config.lua` or `/sgc/config.lua`.
-3. Ensure `startup.lua` is at the computer root.
-4. Attach the required modem and Stargate Interface peripherals.
-5. Reboot or run `startup`.
+You need two things:
 
-For an address book cache path like `/sgc/cache/address_book.lua`, create the parent directories before first save if your deployment process does not do that already.
+1. A normal computer on your real host OS running this repository.
+2. A ComputerCraft computer in Minecraft that will run StargateCommand.
 
-For first install with the updater enabled:
+### 1. Prepare the host mirror
 
-1. Copy the initial runtime files manually.
-   `startup.lua` must be at the computer root, and `src/` must be present.
-2. Create the machine-local config at `config.lua` or `/sgc/config.lua`.
-3. Add an `update` block to that config:
+From the repo root on the real host machine:
 
-```lua
-update = {
-    mode = "apply",
-    base_url = "http://mirror-host:8080",
-    channel = "stable",
-    state_path = "/sgc/state/update_state.lua",
-    temp_dir = "/sgc/tmp/update",
-    auto_reboot = false,
+1. Make sure `update_mirror.json` exists at the repo root.
+2. For a local development channel, it should look like this:
+
+```json
+{
+  "schema": 1,
+  "bind": "127.0.0.1",
+  "port": 8090,
+  "snapshot_root": "dist/update_mirror",
+  "deploy_manifest": "tools/deploy_manifest.txt",
+  "channels": [
+    {
+      "name": "dev",
+      "source": {
+        "kind": "workspace",
+        "root": ".",
+        "revision_mode": "git_head"
+      }
+    }
+  ]
 }
 ```
 
-4. Start the host mirror on the machine that serves updates:
+3. Build the current snapshot:
 
 ```bash
-python3 tools/update_mirror.py --config examples/update_mirror.example.json refresh
-python3 tools/update_mirror.py --config examples/update_mirror.example.json serve
+python3 tools/update_mirror.py --config update_mirror.json refresh
 ```
 
-5. Reboot the ComputerCraft machine or run `startup`.
+4. Start the mirror server:
 
-On that first updater-enabled boot, the node will fetch `manifest.json` from the configured channel, download any managed files that differ, and save update state to `state_path`. The updater only manages the deploy payload from [tools/deploy_manifest.txt](/lamda/Lager/0/Codes/StargateCommand/tools/deploy_manifest.txt:1), which currently means:
+```bash
+python3 tools/update_mirror.py --config update_mirror.json serve
+```
+
+5. Leave that process running while you test updates.
+
+Relative path rule:
+`update_mirror.json` is at the repo root, so its paths use `dist/update_mirror`, `tools/deploy_manifest.txt`, and `.`.
+
+### 2. Copy only `startup.lua` onto the ComputerCraft machine
+
+For first install, you only need the root [startup.lua](/lamda/Lager/0/Codes/StargateCommand/startup.lua:1) on the ComputerCraft computer.
+
+You do not need to copy `src/` or create `config.lua` manually first.
+
+When `startup.lua` sees that `src/startup.lua` does not exist yet, it switches into bootstrap mode and asks a few setup questions.
+
+### 3. Boot the ComputerCraft machine for the first time
+
+1. Put `startup.lua` at the computer root.
+2. Reboot the machine or run `startup`.
+3. Answer the bootstrap questions:
+   `Mirror host`
+   Default if you press Enter: `127.0.0.1`
+   `Mirror port`
+   Default if you press Enter: `8090`
+   `Update channel`
+   Default if you press Enter: `stable`
+   `Site id`
+   Example: `command`
+   `Role`
+   Example: `site_controller`
+   `Automatically reboot after future updates`
+   Default if you press Enter: `yes`
+4. Confirm the bootstrap summary when prompted.
+
+If the mirror is running on the same machine as the Minecraft server, `127.0.0.1` is usually correct.
+If the mirror is running on another machine, enter that machine's LAN IP address or hostname instead.
+
+What bootstrap does:
+
+1. Fetches `manifest.json` from the selected channel.
+2. Downloads the managed runtime files.
+3. Writes a complete local `config.lua`.
+4. Writes update state to `/sgc/state/update_state.lua`.
+5. Continues booting using the newly downloaded runtime.
+
+The generated config is a valid full config, not just an `update` block. If you already had a partial `config.lua`, bootstrap reuses what it can and fills in the missing defaults.
+
+If you are using an address book cache path like `/sgc/cache/address_book.lua`, create the parent directories before first save if your deployment process does not already do that.
+
+### 4. Optional: edit the generated config later
+
+After bootstrap finishes, you can still edit `config.lua` or `/sgc/config.lua` manually if you want to change modem sides, logging, address book behavior, or update settings.
+
+The generated config uses safe defaults and sets:
+
+- `update.mode = "apply"`
+- `update.base_url` to `http://<mirror-host>:<mirror-port>`
+- `update.channel` to the channel you entered
+- `update.state_path = "/sgc/state/update_state.lua"`
+- `update.temp_dir = "/sgc/tmp/update"`
+
+### 5. Understand what the updater manages
+
+The updater only manages the deploy payload from [tools/deploy_manifest.txt](/lamda/Lager/0/Codes/StargateCommand/tools/deploy_manifest.txt:1). Right now that means:
 
 - `startup.lua`
 - `src/`
@@ -130,28 +200,43 @@ It intentionally does not manage:
 
 - `config.lua`
 - `/sgc/config.lua`
-- address book cache or other mutable world data
+- address book cache files
+- other mutable world or machine-local data
 
-For ongoing use:
+That means you should treat config and saved data as local state, not something the updater will replace for you.
 
-1. Refresh the mirror whenever you publish a new version:
+### 6. Apply later updates
+
+When you change code in this repository:
+
+1. Refresh the host snapshot:
 
 ```bash
-python3 tools/update_mirror.py --config examples/update_mirror.example.json refresh
+python3 tools/update_mirror.py --config update_mirror.json refresh
 ```
 
 2. Keep the mirror server running.
-3. Reboot a node, or run the `update_client` role on a machine configured for updates, to make it check the channel again.
+3. Reboot the ComputerCraft machine, or run a machine configured with the `update_client` role, to make it check for updates again.
 
-Update modes:
+### 7. Update mode behavior
 
-- `disabled`: skip update checks entirely
-- `notify`: report that an update is available but do not apply it
-- `apply`: stage and apply managed file changes before the main app starts
+- `disabled`: do not check for updates
+- `notify`: check and report if an update exists, but do not apply it
+- `apply`: download and apply managed file changes before the main app starts
 
-If `auto_reboot = false`, an applied update stops startup and requires a reboot before the new code runs. If `auto_reboot = true`, the updater requests a reboot automatically after a successful apply.
+If `auto_reboot = false`, a successful apply stops startup and requires one manual reboot.
+If `auto_reboot = true`, the machine requests a reboot automatically after a successful apply.
 
-The automated update payload is narrower than a full repository copy. It intentionally excludes machine-local config and mutable world data. See [docs/update_mirror.md](/lamda/Lager/0/Codes/StargateCommand/docs/update_mirror.md) for the full host mirror and client details.
+### 8. Common mistakes
+
+- Forgetting to enable the HTTP API in ComputerCraft.
+- Pointing `base_url` at the wrong host or wrong port.
+- Typing a channel name that does not exist on the mirror.
+- Stopping the mirror server before the first bootstrap download finishes.
+- Forgetting to run `refresh` after changing code on the host.
+- Expecting the updater to manage `config.lua` or saved game data.
+
+The automated update payload is intentionally narrower than a full repository copy. See [docs/update_mirror.md](/lamda/Lager/0/Codes/StargateCommand/docs/update_mirror.md) for the fuller mirror and client details.
 
 ## Checks
 

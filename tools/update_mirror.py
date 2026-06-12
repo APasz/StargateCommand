@@ -9,6 +9,7 @@ import http
 import http.server
 import io
 import json
+import errno
 import os
 import pathlib
 import re
@@ -672,9 +673,17 @@ class MirrorHttpServer(socketserver.ThreadingMixIn, http.server.HTTPServer):
 
 def serve_mirror(config: MirrorConfig) -> None:
     _ensure_directory(config.snapshot_root)
-    with MirrorHttpServer((config.bind, config.port), config.snapshot_root) as server:
-        print(f"Serving update mirror on http://{config.bind}:{config.port}")
-        server.serve_forever()
+    try:
+        with MirrorHttpServer((config.bind, config.port), config.snapshot_root) as server:
+            print(f"Serving update mirror on http://{config.bind}:{config.port}")
+            server.serve_forever()
+    except OSError as exc:
+        if exc.errno == errno.EADDRINUSE:
+            raise MirrorError(
+                f"Port {config.port} on {config.bind} is already in use. "
+                "Stop the existing service or choose a different port in the mirror config."
+            ) from exc
+        raise
 
 
 def _parse_args() -> argparse.Namespace:
@@ -683,6 +692,11 @@ def _parse_args() -> argparse.Namespace:
         "--config",
         default="examples/update_mirror.example.json",
         help="Path to the mirror JSON config file.",
+    )
+    parser.add_argument(
+        "--port",
+        type=int,
+        help="Override the configured HTTP port for this process.",
     )
 
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -708,6 +722,10 @@ def _parse_args() -> argparse.Namespace:
 def main() -> int:
     args = _parse_args()
     config = load_config(pathlib.Path(args.config).resolve())
+    if args.port is not None:
+        if args.port < 1 or args.port > 65535:
+            raise MirrorError(f"--port must be between 1 and 65535: {args.port}")
+        config = dataclasses.replace(config, port=args.port)
 
     if args.command == "refresh":
         manifests = refresh_mirror(config, set(args.channels) if args.channels else None)

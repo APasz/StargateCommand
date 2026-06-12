@@ -69,6 +69,11 @@ That separation keeps the HTTP process simple and makes failures explicit. If a 
 
 See [examples/update_mirror.example.json](/lamda/Lager/0/Codes/StargateCommand/examples/update_mirror.example.json).
 
+All relative paths in the mirror config are resolved relative to the config file itself, not relative to the current shell directory. That means:
+
+- `examples/update_mirror.example.json` correctly uses `../dist/update_mirror`, `../tools/deploy_manifest.txt`, and `..`
+- a repo-root `update_mirror.json` should instead use `dist/update_mirror`, `tools/deploy_manifest.txt`, and `.`
+
 The example uses:
 
 - `stable` -> public GitHub over HTTPS
@@ -126,7 +131,7 @@ Each machine can opt into self-update with a config block like:
 ```lua
 update = {
     mode = "apply",
-    base_url = "http://mirror-host:8080",
+    base_url = "http://mirror-host:8090",
     channel = "stable",
     state_path = "/sgc/state/update_state.lua",
     temp_dir = "/sgc/tmp/update",
