@@ -11,6 +11,7 @@ local DEFAULT_BOOTSTRAP_HOST = "127.0.0.1"
 local DEFAULT_BOOTSTRAP_PORT = 8090
 local DEFAULT_BOOTSTRAP_CHANNEL = "stable"
 local CURRENT_ENV = _ENV
+local path_exists
 
 local ROLE_ORDER = {
     "site_controller",
@@ -168,7 +169,7 @@ end
 
 ---@param path string
 ---@return boolean
-local function path_exists(path)
+function path_exists(path)
     if fs ~= nil and type(fs.exists) == "function" then
         local ok, exists = pcall(fs.exists, path)
         return ok and exists == true
@@ -929,24 +930,15 @@ local function run_installed_startup()
     prepend_package_path("src/?.lua")
 
     while true do
-        if shell ~= nil and type(shell.run) == "function" and path_exists("src/boot.lua") then
-            local ok = shell.run("src/boot.lua")
-            if ok then
-                return true
-            end
-
-            print_error("boot failed: src/boot.lua did not run successfully")
-        else
         local startup_module, load_error = load_module_chunk("src/startup.lua")
-            if startup_module ~= nil and type(startup_module) == "table" and type(startup_module.run) == "function" then
-                return startup_module.run()
-            end
-
-            local failure_message = startup_module ~= nil
-                and "boot failed: startup module did not expose run()"
-                or "boot failed: " .. tostring(load_error)
-            print_error(failure_message)
+        if startup_module ~= nil and type(startup_module) == "table" and type(startup_module.run) == "function" then
+            return startup_module.run()
         end
+
+        local failure_message = startup_module ~= nil
+            and "boot failed: startup module did not expose run()"
+            or "boot failed: " .. tostring(load_error)
+        print_error(failure_message)
 
         if not read_yes_no("Reinstall runtime from mirror", true) then
             return false
