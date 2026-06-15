@@ -2,12 +2,89 @@ local constants = require("core.constants")
 
 local signal = {}
 
+---@param state table
+local function reset_connection_cycle(state)
+    state.connection_cycle_active = false
+    state.wormhole_cycle_pulsed = {
+        incoming = false,
+        outgoing = false,
+    }
+end
+
+---@param state table
+local function begin_connection_cycle(state)
+    state.connection_cycle_active = true
+    state.wormhole_cycle_pulsed = {
+        incoming = false,
+        outgoing = false,
+    }
+end
+
+---@param gate_state SgcGateState?
+---@return boolean?
+local function connection_cycle_active(gate_state)
+    if type(gate_state) ~= "table" then
+        return nil
+    end
+
+    return gate_state.connected == true
+        or gate_state.open == true
+        or gate_state.partial_dial == true
+        or gate_state.dialing_out == true
+        or gate_state.activity == "dialing_out"
+        or gate_state.activity == "partial_dial"
+        or gate_state.activity == "incoming_open"
+        or gate_state.activity == "incoming_connected"
+        or gate_state.activity == "outgoing_open"
+        or gate_state.activity == "outgoing_connected"
+end
+
+---@param state table
+---@param gate_state SgcGateState?
+local function sync_connection_cycle(state, gate_state)
+    local active = connection_cycle_active(gate_state)
+    if active == nil then
+        return
+    end
+
+    if active == true then
+        if state.connection_cycle_active ~= true then
+            begin_connection_cycle(state)
+        end
+        return
+    end
+
+    reset_connection_cycle(state)
+end
+
+---@param signal_name SgcAlarmSignalName
+---@return "incoming" | "outgoing"?
+local function wormhole_direction(signal_name)
+    if signal_name == "wormhole_incoming" then
+        return "incoming"
+    end
+
+    if signal_name == "wormhole_outgoing" then
+        return "outgoing"
+    end
+
+    return nil
+end
+
 ---@return table
 function signal.new_state()
-    return {
+    local state = {
         pulse_until = {},
         last_connected = false,
+        connection_cycle_active = false,
+        wormhole_cycle_pulsed = {
+            incoming = false,
+            outgoing = false,
+        },
     }
+
+    reset_connection_cycle(state)
+    return state
 end
 
 ---@param state table
@@ -16,6 +93,19 @@ end
 function signal.activate_pulse(state, signal_name, now_ms)
     if constants.ALARM_SIGNAL_SET[signal_name] ~= true then
         return
+    end
+
+    local direction = wormhole_direction(signal_name)
+    if direction ~= nil then
+        if state.connection_cycle_active ~= true then
+            begin_connection_cycle(state)
+        end
+
+        if state.wormhole_cycle_pulsed[direction] == true then
+            return
+        end
+
+        state.wormhole_cycle_pulsed[direction] = true
     end
 
     state.pulse_until[signal_name] = now_ms + constants.ALARM_PULSE_DURATION_MS
@@ -33,6 +123,8 @@ function signal.observe_gate_state(state, previous_gate_state, gate_state, now_m
     if previous_connected == true and connected ~= true then
         signal.activate_pulse(state, "connection_disconnected", now_ms)
     end
+
+    sync_connection_cycle(state, gate_state)
 
     if type(previous_gate_state) == "table" and previous_open ~= true and open == true and type(gate_state) == "table" then
         if gate_state.connection_direction == "incoming" then

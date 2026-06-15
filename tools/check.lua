@@ -966,25 +966,31 @@ do
 
             return {
                 getNamesRemote = function()
-                    return { "speaker_0" }
+                    return { "speaker_0", "speaker_1" }
                 end,
                 hasTypeRemote = function(remote_name, wanted_type)
-                    return remote_name == "speaker_0" and wanted_type == "speaker"
+                    return (remote_name == "speaker_0" or remote_name == "speaker_1") and wanted_type == "speaker"
                 end,
                 callRemote = function(remote_name, method_name, ...)
-                    if remote_name ~= "speaker_0" then
+                    if remote_name ~= "speaker_0" and remote_name ~= "speaker_1" then
                         error("unexpected remote speaker " .. tostring(remote_name))
                     end
 
                     if method_name == "stop" then
-                        speaker_calls[#speaker_calls + 1] = "stop"
+                        speaker_calls[#speaker_calls + 1] = remote_name .. ":stop"
                         return
                     end
 
                     if method_name == "playNote" then
                         local instrument, volume, pitch = ...
                         speaker_calls[#speaker_calls + 1] =
-                            "playNote:" .. tostring(instrument) .. ":" .. tostring(volume) .. ":" .. tostring(pitch)
+                            remote_name
+                            .. ":playNote:"
+                            .. tostring(instrument)
+                            .. ":"
+                            .. tostring(volume)
+                            .. ":"
+                            .. tostring(pitch)
                         return true
                     end
 
@@ -994,7 +1000,7 @@ do
         end,
     }
 
-    local incoming_override_runtime = {
+    local incoming_override_runtime = alarm_speaker.new_runtime({
         bindings = {
             {
                 signal = "connection_incoming",
@@ -1006,19 +1012,13 @@ do
             },
         },
         peripheral_side = "top",
-        active = false,
-        active_binding_index = nil,
-        active_signal = nil,
-        active_pattern = nil,
-        step_index = 1,
-        next_play_at = 0,
-    }
+    })
     local incoming_override_play = alarm_speaker.update(incoming_override_runtime, {
         connection_incoming = true,
         system_error = true,
     })
 
-    local ordered_runtime = {
+    local ordered_runtime = alarm_speaker.new_runtime({
         bindings = {
             {
                 signal = "connection_outgoing",
@@ -1030,19 +1030,13 @@ do
             },
         },
         peripheral_side = "top",
-        active = false,
-        active_binding_index = nil,
-        active_signal = nil,
-        active_pattern = nil,
-        step_index = 1,
-        next_play_at = 0,
-    }
+    })
     local ordered_play = alarm_speaker.update(ordered_runtime, {
         connection_outgoing = true,
         system_error = true,
     })
     local ordered_stop = alarm_speaker.update(ordered_runtime, {})
-    local dialing_runtime = {
+    local dialing_runtime = alarm_speaker.new_runtime({
         bindings = {
             {
                 signal = "dialing",
@@ -1050,17 +1044,11 @@ do
             },
         },
         peripheral_side = "top",
-        active = false,
-        active_binding_index = nil,
-        active_signal = nil,
-        active_pattern = nil,
-        step_index = 1,
-        next_play_at = 0,
-    }
+    })
     local dialing_play = alarm_speaker.update(dialing_runtime, {
         dialing = true,
     })
-    local manual_runtime = {
+    local manual_runtime = alarm_speaker.new_runtime({
         bindings = {
             {
                 signal = "connection_incoming",
@@ -1072,13 +1060,7 @@ do
             },
         },
         peripheral_side = "top",
-        active = false,
-        active_binding_index = nil,
-        active_signal = nil,
-        active_pattern = nil,
-        step_index = 1,
-        next_play_at = 0,
-    }
+    })
     local manual_snapshot_before = alarm_speaker.snapshot(manual_runtime, manual_runtime.bindings, {})
     local manual_override_enabled = alarm_speaker.toggle_override(manual_runtime, "speaker:1", false, false)
     local manual_play = alarm_speaker.update(manual_runtime, {})
@@ -1086,33 +1068,62 @@ do
     local manual_override_disabled = alarm_speaker.toggle_override(manual_runtime, "speaker:1", true, false)
     local manual_stop = alarm_speaker.update(manual_runtime, {})
 
+    peripheral = {
+        wrap = function(_side)
+            return nil
+        end,
+    }
+    local optional_runtime = alarm_speaker.new_runtime({
+        bindings = {
+            {
+                signal = "system_error",
+                pattern = "pattern_beta",
+            },
+        },
+        peripheral_side = "top",
+    })
+    local optional_play = alarm_speaker.update(optional_runtime, {
+        system_error = true,
+    })
+
     peripheral = original_peripheral_speaker
 
     if not incoming_override_play.ok
         or incoming_override_play.value.signal ~= "system_error"
         or incoming_override_play.value.pattern ~= "pattern_beta"
-        or speaker_calls[1] ~= "playNote:didgeridoo:3.0:6"
+        or speaker_calls[1] ~= "speaker_0:playNote:didgeridoo:3.0:6"
+        or speaker_calls[2] ~= "speaker_1:playNote:didgeridoo:3.0:6"
         or not ordered_play.ok
         or ordered_play.value.signal ~= "connection_outgoing"
         or ordered_play.value.pattern ~= "pattern_alpha"
-        or speaker_calls[2] ~= "playNote:didgeridoo:3.0:8"
+        or speaker_calls[3] ~= "speaker_0:playNote:didgeridoo:3.0:8"
+        or speaker_calls[4] ~= "speaker_1:playNote:didgeridoo:3.0:8"
         or not ordered_stop.ok
-        or speaker_calls[3] ~= "stop"
+        or speaker_calls[5] ~= "speaker_0:stop"
+        or speaker_calls[6] ~= "speaker_1:stop"
         or not dialing_play.ok
         or dialing_play.value.signal ~= "dialing"
         or dialing_play.value.pattern ~= "pattern_beta"
-        or speaker_calls[4] ~= "playNote:didgeridoo:3.0:6"
+        or speaker_calls[7] ~= "speaker_0:playNote:didgeridoo:3.0:6"
+        or speaker_calls[8] ~= "speaker_1:playNote:didgeridoo:3.0:6"
         or manual_snapshot_before[1].active ~= false
         or manual_override_enabled ~= true
         or not manual_play.ok
         or manual_play.value.signal ~= "connection_incoming"
         or manual_play.value.pattern ~= "pattern_alpha"
-        or speaker_calls[5] ~= "playNote:didgeridoo:3.0:8"
+        or speaker_calls[9] ~= "speaker_0:playNote:didgeridoo:3.0:8"
+        or speaker_calls[10] ~= "speaker_1:playNote:didgeridoo:3.0:8"
         or manual_snapshot_after[1].active ~= true
         or manual_snapshot_after[1].override_active ~= true
         or manual_override_disabled ~= false
         or not manual_stop.ok
-        or speaker_calls[6] ~= "stop"
+        or speaker_calls[11] ~= "speaker_0:stop"
+        or speaker_calls[12] ~= "speaker_1:stop"
+        or not optional_play.ok
+        or optional_play.value.playing ~= false
+        or optional_play.value.signal ~= "system_error"
+        or optional_play.value.pattern ~= "pattern_beta"
+        or optional_play.value.unavailable ~= true
     then
         io.stderr:write("Alarm speaker selection or precedence failed\n")
         os.exit(1)
@@ -1202,6 +1213,108 @@ do
     }, 1000)
     if disconnected_signals.connection_disconnected ~= true or disconnected_signals.connection_established ~= false then
         io.stderr:write("Alarm signal disconnect transition evaluation failed\n")
+        os.exit(1)
+    end
+
+    local outgoing_wormhole_cycle_state = alarm_signal.new_state()
+    alarm_signal.activate_pulse(outgoing_wormhole_cycle_state, "wormhole_outgoing", 1000)
+    local first_outgoing_expiry = outgoing_wormhole_cycle_state.pulse_until.wormhole_outgoing
+    alarm_signal.observe_gate_state(outgoing_wormhole_cycle_state, {
+        connected = false,
+        open = false,
+        partial_dial = true,
+        dialing_out = false,
+        activity = "partial_dial",
+        connection_direction = "outgoing",
+    }, {
+        connected = false,
+        open = true,
+        partial_dial = false,
+        dialing_out = false,
+        activity = "outgoing_open",
+        connection_direction = "outgoing",
+    }, 1500)
+    local deduped_outgoing_expiry = outgoing_wormhole_cycle_state.pulse_until.wormhole_outgoing
+    alarm_signal.observe_gate_state(outgoing_wormhole_cycle_state, {
+        connected = false,
+        open = true,
+        partial_dial = false,
+        dialing_out = false,
+        activity = "outgoing_open",
+        connection_direction = "outgoing",
+    }, {
+        connected = false,
+        open = false,
+        partial_dial = false,
+        dialing_out = false,
+        activity = "idle",
+        connection_direction = nil,
+    }, 2000)
+    alarm_signal.activate_pulse(outgoing_wormhole_cycle_state, "wormhole_outgoing", 2500)
+    local second_outgoing_expiry = outgoing_wormhole_cycle_state.pulse_until.wormhole_outgoing
+    if first_outgoing_expiry ~= 1000 + constants.ALARM_PULSE_DURATION_MS
+        or deduped_outgoing_expiry ~= first_outgoing_expiry
+        or second_outgoing_expiry ~= 2500 + constants.ALARM_PULSE_DURATION_MS
+    then
+        io.stderr:write("Alarm wormhole outgoing pulse dedupe failed\n")
+        os.exit(1)
+    end
+
+    local incoming_wormhole_cycle_state = alarm_signal.new_state()
+    alarm_signal.observe_gate_state(incoming_wormhole_cycle_state, {
+        connected = false,
+        open = false,
+        partial_dial = false,
+        dialing_out = false,
+        activity = "idle",
+        connection_direction = nil,
+    }, {
+        connected = false,
+        open = true,
+        partial_dial = false,
+        dialing_out = false,
+        activity = "incoming_open",
+        connection_direction = "incoming",
+    }, 3000)
+    local first_incoming_expiry = incoming_wormhole_cycle_state.pulse_until.wormhole_incoming
+    alarm_signal.activate_pulse(incoming_wormhole_cycle_state, "wormhole_incoming", 3500)
+    local deduped_incoming_expiry = incoming_wormhole_cycle_state.pulse_until.wormhole_incoming
+    alarm_signal.observe_gate_state(incoming_wormhole_cycle_state, {
+        connected = false,
+        open = true,
+        partial_dial = false,
+        dialing_out = false,
+        activity = "incoming_open",
+        connection_direction = "incoming",
+    }, {
+        connected = false,
+        open = false,
+        partial_dial = false,
+        dialing_out = false,
+        activity = "idle",
+        connection_direction = nil,
+    }, 4000)
+    alarm_signal.observe_gate_state(incoming_wormhole_cycle_state, {
+        connected = false,
+        open = false,
+        partial_dial = false,
+        dialing_out = false,
+        activity = "idle",
+        connection_direction = nil,
+    }, {
+        connected = false,
+        open = true,
+        partial_dial = false,
+        dialing_out = false,
+        activity = "incoming_open",
+        connection_direction = "incoming",
+    }, 4500)
+    local second_incoming_expiry = incoming_wormhole_cycle_state.pulse_until.wormhole_incoming
+    if first_incoming_expiry ~= 3000 + constants.ALARM_PULSE_DURATION_MS
+        or deduped_incoming_expiry ~= first_incoming_expiry
+        or second_incoming_expiry ~= 4500 + constants.ALARM_PULSE_DURATION_MS
+    then
+        io.stderr:write("Alarm wormhole incoming pulse dedupe failed\n")
         os.exit(1)
     end
 
@@ -1295,25 +1408,31 @@ local function check_alarm_controller_start()
 
             return {
                 getNamesRemote = function()
-                    return { "speaker_0" }
+                    return { "speaker_0", "speaker_1" }
                 end,
                 hasTypeRemote = function(remote_name, wanted_type)
-                    return remote_name == "speaker_0" and wanted_type == "speaker"
+                    return (remote_name == "speaker_0" or remote_name == "speaker_1") and wanted_type == "speaker"
                 end,
                 callRemote = function(remote_name, method_name, ...)
-                    if remote_name ~= "speaker_0" then
+                    if remote_name ~= "speaker_0" and remote_name ~= "speaker_1" then
                         error("unexpected remote speaker " .. tostring(remote_name))
                     end
 
                     if method_name == "stop" then
-                        startup_speaker_calls[#startup_speaker_calls + 1] = "stop"
+                        startup_speaker_calls[#startup_speaker_calls + 1] = remote_name .. ":stop"
                         return
                     end
 
                     if method_name == "playNote" then
                         local instrument, volume, pitch = ...
                         startup_speaker_calls[#startup_speaker_calls + 1] =
-                            "playNote:" .. tostring(instrument) .. ":" .. tostring(volume) .. ":" .. tostring(pitch)
+                            remote_name
+                            .. ":playNote:"
+                            .. tostring(instrument)
+                            .. ":"
+                            .. tostring(volume)
+                            .. ":"
+                            .. tostring(pitch)
                         return true
                     end
 
@@ -1467,8 +1586,10 @@ local function check_alarm_controller_start()
         or startup_redstone_calls[1] ~= "redstone:left:false"
         or startup_redstone_calls[2] ~= "redstone:right:false"
         or startup_redstone_calls[3] ~= "bundled:back:0"
-        or startup_speaker_calls[1] ~= "stop"
-        or startup_speaker_calls[2] ~= "playNote:didgeridoo:3.0:8"
+        or startup_speaker_calls[1] ~= "speaker_0:stop"
+        or startup_speaker_calls[2] ~= "speaker_1:stop"
+        or startup_speaker_calls[3] ~= "speaker_0:playNote:didgeridoo:3.0:8"
+        or startup_speaker_calls[4] ~= "speaker_1:playNote:didgeridoo:3.0:8"
         or startup_alarm_requests[1] ~= "gate_controller:status"
         or startup_alarm_requests[2] ~= "site_controller:status"
         or startup_alarm_state_events ~= 2
@@ -3787,6 +3908,20 @@ local function check_remote_monitor_rendering()
         return line:gsub("%s+$", "")
     end
 
+    local function find_upvalue(func, wanted_name)
+        for index = 1, 32 do
+            local upvalue_name, upvalue_value = debug.getupvalue(func, index)
+            if upvalue_name == nil then
+                return nil
+            end
+            if upvalue_name == wanted_name then
+                return upvalue_value
+            end
+        end
+
+        return nil
+    end
+
     reset_remote_monitor_screen()
     peripheral = {
         wrap = function(side)
@@ -3974,6 +4109,105 @@ local function check_remote_monitor_rendering()
         end
     end
 
+    do
+        local start_interactive = find_upvalue(dial_console.start, "start_interactive")
+        local controller_loop = start_interactive ~= nil and find_upvalue(start_interactive, "controller_loop") or nil
+        local render_monitor = controller_loop ~= nil and find_upvalue(controller_loop, "render_monitor") or nil
+        local outgoing_progress_highlight = render_monitor ~= nil
+                and find_upvalue(render_monitor, "outgoing_progress_highlight")
+            or nil
+        local render_outgoing_address_progress = render_monitor ~= nil
+                and find_upvalue(render_monitor, "render_outgoing_address_progress")
+            or nil
+
+        local function render_symbol_colors(highlight)
+            local writes = {}
+            local cursor_x = 1
+            local cursor_y = 1
+            local current_color = colors.white
+            local terminal = {
+                isColor = function()
+                    return true
+                end,
+                setCursorPos = function(x, y)
+                    cursor_x = x
+                    cursor_y = y
+                end,
+                setTextColor = function(color)
+                    current_color = color
+                end,
+                write = function(text)
+                    writes[#writes + 1] = {
+                        text = text,
+                        color = current_color,
+                        x = cursor_x,
+                        y = cursor_y,
+                    }
+                    cursor_x = cursor_x + #text
+                end,
+            }
+
+            render_outgoing_address_progress(terminal, 39, 5, { 9, 11, 14, 21, 22, 29, 0 }, 2, highlight)
+
+            local symbol_colors = {}
+            for _, write_call in ipairs(writes) do
+                if write_call.text ~= "Address: " and write_call.text ~= "-" and write_call.text:match("%S") ~= nil then
+                    symbol_colors[#symbol_colors + 1] = {
+                        text = write_call.text,
+                        color = write_call.color,
+                    }
+                end
+            end
+
+            return symbol_colors
+        end
+
+        local basic_highlight = outgoing_progress_highlight({
+            gate_state = {
+                interface_type = "basic_interface",
+                current_symbol = 11,
+            },
+        }, { 9, 11, 14, 21, 22, 29, 0 }, 2)
+        local basic_symbol_colors = render_symbol_colors(basic_highlight)
+        local exact_highlight = outgoing_progress_highlight({
+            gate_state = {
+                interface_type = "advanced_crystal_interface",
+                current_symbol = 14,
+            },
+        }, { 9, 11, 14, 21, 22, 29, 0 }, 2)
+        local exact_symbol_colors = render_symbol_colors(exact_highlight)
+
+        if start_interactive == nil
+            or controller_loop == nil
+            or render_monitor == nil
+            or outgoing_progress_highlight == nil
+            or render_outgoing_address_progress == nil
+            or basic_highlight == nil
+            or basic_highlight.index ~= 3
+            or basic_highlight.exact ~= false
+            or exact_highlight == nil
+            or exact_highlight.index ~= 3
+            or exact_highlight.exact ~= true
+            or basic_symbol_colors[1] == nil
+            or basic_symbol_colors[1].color ~= colors.lime
+            or basic_symbol_colors[2] == nil
+            or basic_symbol_colors[2].color ~= colors.lime
+            or basic_symbol_colors[3] == nil
+            or basic_symbol_colors[3].text ~= "14"
+            or basic_symbol_colors[3].color ~= colors.orange
+            or basic_symbol_colors[4] == nil
+            or basic_symbol_colors[4].color ~= colors.gray
+            or exact_symbol_colors[3] == nil
+            or exact_symbol_colors[3].text ~= "14"
+            or exact_symbol_colors[3].color ~= colors.yellow
+            or exact_symbol_colors[4] == nil
+            or exact_symbol_colors[4].color ~= colors.gray
+        then
+            io.stderr:write("Dial console progress highlighting failed\n")
+            os.exit(1)
+        end
+    end
+
     peripheral = original_peripheral
     colors = original_colors_monitor
 
@@ -4030,6 +4264,100 @@ local function check_remote_monitor_rendering()
 end
 
 check_remote_monitor_rendering()
+
+;(function()
+    local original_transport_open_legacy = rednet_transport.open
+    local original_address_book_client_start_legacy = address_book_client.start
+    local original_command_broadcast_legacy = command_network.broadcast_command
+    local original_command_wait_legacy = command_network.wait_for_result
+    local original_print_legacy = print
+    local original_read_legacy = read
+    local start_legacy = nil
+    local printed_lines = {}
+    for index = 1, 8 do
+        local upvalue_name, upvalue_value = debug.getupvalue(dial_console.start, index)
+        if upvalue_name == "start_legacy" then
+            start_legacy = upvalue_value
+            break
+        end
+    end
+
+    rednet_transport.open = function(_side)
+        return result.ok(true)
+    end
+    address_book_client.start = function(_config)
+        return result.ok({
+            mode = "client",
+            cache_loaded = true,
+            book = validation.value,
+        })
+    end
+    command_network.broadcast_command = function(_config, _payload)
+        return result.ok({
+            msg_id = "legacy-dial",
+        })
+    end
+    command_network.wait_for_result = function(_config, expected_reply_to, _timeout_seconds, _options)
+        return result.ok({
+            reply_to = expected_reply_to,
+            payload = {
+                ok = true,
+                result = {
+                    dial_mode_used = "fast",
+                    state = {
+                        connected = false,
+                    },
+                },
+            },
+        })
+    end
+    print = function(...)
+        printed_lines[#printed_lines + 1] = table.concat({ ... }, " ")
+    end
+    read = (function()
+        local responses = {
+            "1",
+            "",
+        }
+        return function()
+            return table.remove(responses, 1) or ""
+        end
+    end)()
+
+    local legacy_started = start_legacy({
+        site = "command",
+        role = "dial_console",
+        modems = {
+            site = "bottom",
+            peripheral = nil,
+        },
+        address_book = {
+            mode = "client",
+            cache_path = "/sgc/cache/address_book.lua",
+            server_site = "command",
+            server_path = "/sgc/data/address_book.json",
+        },
+    }, nil)
+
+    rednet_transport.open = original_transport_open_legacy
+    address_book_client.start = original_address_book_client_start_legacy
+    command_network.broadcast_command = original_command_broadcast_legacy
+    command_network.wait_for_result = original_command_wait_legacy
+    print = original_print_legacy
+    read = original_read_legacy
+
+    if start_legacy == nil or not legacy_started.ok then
+        io.stderr:write("Dial console legacy start test failed\n")
+        os.exit(1)
+    end
+
+    for _, printed_line in ipairs(printed_lines) do
+        if printed_line == "Destinations" then
+            io.stderr:write("Dial console legacy menu still prints Destinations header\n")
+            os.exit(1)
+        end
+    end
+end)()
 
 do
     local manifest = {

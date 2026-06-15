@@ -8,5 +8,5 @@ Type=oneshot
 User=debian
 Group=debian
 WorkingDirectory=/home/debian/sgc_mirror
-ExecStartPre=/usr/bin/git -C /home/debian/sgc_mirror pull --ff-only origin main
+ExecStartPre=/usr/bin/git -C /home/debian/sgc_mirror/repo pull --ff-only origin main
 ExecStart=/usr/bin/python3 /home/debian/sgc_mirror/update_mirror.py --config /home/debian/sgc_mirror/update_mirror.json refresh --channel stable

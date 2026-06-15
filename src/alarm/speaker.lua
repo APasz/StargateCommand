@@ -40,6 +40,24 @@ local PATTERNS = {
     },
 }
 
+---@param config table?
+---@return table
+function speaker.new_runtime(config)
+    local resolved_config = type(config) == "table" and config or {}
+    return {
+        bindings = type(resolved_config.bindings) == "table" and resolved_config.bindings or {},
+        peripheral_side = resolved_config.peripheral_side,
+        overrides = {},
+        active = false,
+        active_binding_index = nil,
+        active_signal = nil,
+        active_pattern = nil,
+        step_index = 1,
+        next_play_at = 0,
+        resolved_speakers = nil,
+    }
+end
+
 ---@param candidate table?
 ---@return boolean
 local function is_speaker(candidate)
@@ -50,40 +68,83 @@ end
 
 ---@param peripheral_side string?
 ---@return SgcResult
-local function resolve_speaker(peripheral_side)
+local function resolve_speakers(peripheral_side)
     if type(peripheral_side) ~= "string" or peripheral_side == "" then
         return result.err("missing_speaker_side")
     end
 
-    return resolver.resolve(peripheral_side, "speaker", is_speaker)
+    return resolver.resolve_all(peripheral_side, "speaker", is_speaker)
 end
 
----@param resolved table
+---@param resolved_speakers table[]
 ---@return SgcResult
-local function stop_speaker(resolved)
-    local ok, stop_error = pcall(resolved.stop)
-    if not ok then
-        return result.err("speaker_stop_failed", {
-            cause = tostring(stop_error),
-        })
+local function stop_speakers(resolved_speakers)
+    for _, resolved in ipairs(resolved_speakers) do
+        local ok, stop_error = pcall(resolved.peripheral.stop)
+        if not ok then
+            return result.err("speaker_stop_failed", {
+                speaker_id = resolved.id,
+                cause = tostring(stop_error),
+            })
+        end
     end
 
     return result.ok(true)
 end
 
----@param peripheral_side string?
+---@param runtime table
+local function invalidate_resolved_speakers(runtime)
+    runtime.resolved_speakers = nil
+end
+
+---@param runtime table
 ---@return SgcResult
-function speaker.clear(peripheral_side)
-    local resolved = resolve_speaker(peripheral_side)
+local function resolve_runtime_speakers(runtime)
+    if type(runtime.resolved_speakers) == "table" and #runtime.resolved_speakers > 0 then
+        return result.ok(runtime.resolved_speakers)
+    end
+
+    local resolved = resolve_speakers(runtime.peripheral_side)
     if not resolved.ok then
         if resolved.error == "missing_speaker" or resolved.error == "missing_speaker_side" then
-            return result.ok(false)
+            invalidate_resolved_speakers(runtime)
+            return result.ok({})
         end
 
         return resolved
     end
 
-    return stop_speaker(resolved.value)
+    runtime.resolved_speakers = resolved.value
+    return result.ok(resolved.value)
+end
+
+---@param runtime table
+---@return SgcResult
+function speaker.clear_runtime(runtime)
+    local resolved = resolve_runtime_speakers(runtime)
+    if not resolved.ok then
+        return resolved
+    end
+
+    if #resolved.value == 0 then
+        return result.ok(false)
+    end
+
+    local stopped = stop_speakers(resolved.value)
+    if not stopped.ok then
+        invalidate_resolved_speakers(runtime)
+        return stopped
+    end
+
+    return stopped
+end
+
+---@param peripheral_side string?
+---@return SgcResult
+function speaker.clear(peripheral_side)
+    return speaker.clear_runtime(speaker.new_runtime({
+        peripheral_side = peripheral_side,
+    }))
 end
 
 ---@param runtime table
@@ -94,6 +155,7 @@ local function reset_runtime(runtime)
     runtime.active_pattern = nil
     runtime.step_index = 1
     runtime.next_play_at = 0
+    runtime.resolved_speakers = nil
 end
 
 ---@param index integer
@@ -267,7 +329,7 @@ function speaker.update(runtime, signals)
     local selected = select_binding(states)
     if selected == nil then
         if runtime.active then
-            local cleared = speaker.clear(runtime.peripheral_side)
+            local cleared = speaker.clear_runtime(runtime)
             if not cleared.ok then
                 return cleared
             end
@@ -288,7 +350,7 @@ function speaker.update(runtime, signals)
 
     if binding_changed(runtime, selected) then
         if runtime.active then
-            local cleared = speaker.clear(runtime.peripheral_side)
+            local cleared = speaker.clear_runtime(runtime)
             if not cleared.ok then
                 return cleared
             end
@@ -313,17 +375,45 @@ function speaker.update(runtime, signals)
         })
     end
 
-    local resolved = resolve_speaker(runtime.peripheral_side)
+    local step = pattern[runtime.step_index] or pattern[1]
+    local resolved = resolve_runtime_speakers(runtime)
     if not resolved.ok then
         return resolved
     end
 
-    local step = pattern[runtime.step_index] or pattern[1]
-    local ok, played = pcall(resolved.value.playNote, step.instrument, step.volume, step.pitch)
-    if not ok then
-        return result.err("speaker_play_failed", {
-            cause = tostring(played),
+    if #resolved.value == 0 then
+        runtime.active = false
+        runtime.active_binding_index = selected.index
+        runtime.active_signal = selected.signal
+        runtime.active_pattern = selected.pattern
+        runtime.step_index = 1
+        runtime.next_play_at = 0
+        return result.ok({
+            playing = false,
+            signal = selected.signal,
+            pattern = selected.pattern,
+            unavailable = true,
         })
+    end
+
+    local any_played = false
+    for _, speaker_device in ipairs(resolved.value) do
+        local ok, played = pcall(
+            speaker_device.peripheral.playNote,
+            step.instrument,
+            step.volume,
+            step.pitch
+        )
+        if not ok then
+            invalidate_resolved_speakers(runtime)
+            return result.err("speaker_play_failed", {
+                speaker_id = speaker_device.id,
+                cause = tostring(played),
+            })
+        end
+        if played == true then
+            any_played = true
+        end
     end
 
     runtime.active = true
@@ -334,7 +424,7 @@ function speaker.update(runtime, signals)
     runtime.step_index = runtime.step_index % #pattern + 1
 
     return result.ok({
-        playing = played == true,
+        playing = any_played,
         signal = selected.signal,
         pattern = selected.pattern,
         step_index = runtime.step_index,

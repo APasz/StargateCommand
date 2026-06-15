@@ -62,17 +62,7 @@ local function ensure_speaker_runtime(runtime, config)
     end
 
     local speaker_config = resolve_speaker_config(config)
-    runtime.speaker = {
-        bindings = speaker_config.bindings,
-        peripheral_side = speaker_config.peripheral_side,
-        overrides = {},
-        active = false,
-        active_binding_index = nil,
-        active_signal = nil,
-        active_pattern = nil,
-        step_index = 1,
-        next_play_at = 0,
-    }
+    runtime.speaker = alarm_speaker.new_runtime(speaker_config)
     return runtime.speaker
 end
 
@@ -726,17 +716,7 @@ function alarm_controller.start(config, logger)
     local runtime = {
         config = config,
         alarm = resolved_alarm,
-        speaker = {
-            bindings = resolved_alarm.speaker.bindings,
-            peripheral_side = resolved_alarm.speaker.peripheral_side,
-            overrides = {},
-            active = false,
-            active_binding_index = nil,
-            active_signal = nil,
-            active_pattern = nil,
-            step_index = 1,
-            next_play_at = 0,
-        },
+        speaker = alarm_speaker.new_runtime(resolved_alarm.speaker),
         signals = {},
         signal_state = alarm_signal.new_state(),
         output_state = alarm_output.new_state(),
@@ -758,7 +738,7 @@ function alarm_controller.start(config, logger)
         return cleared_outputs
     end
 
-    local cleared_speaker = alarm_speaker.clear(runtime.speaker.peripheral_side)
+    local cleared_speaker = alarm_speaker.clear_runtime(runtime.speaker)
     if not cleared_speaker.ok then
         return cleared_speaker
     end

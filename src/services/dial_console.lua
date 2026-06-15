@@ -826,19 +826,33 @@ local function engaged_outgoing_progress(runtime, address)
     return math.max(0, math.min(progress, #address))
 end
 
+---@class SgcOutgoingProgressHighlight
+---@field index integer
+---@field exact boolean
+
 ---@param runtime table
 ---@param address integer[]
----@return integer?
-local function current_outgoing_symbol_index(runtime, address)
+---@param engaged_progress integer
+---@return SgcOutgoingProgressHighlight?
+local function outgoing_progress_highlight(runtime, address, engaged_progress)
+    local clamped_progress = math.max(0, math.min(engaged_progress, #address))
     local gate_state = runtime.gate_state or {}
-    if type(gate_state.current_symbol) ~= "number" then
-        return nil
+    if type(gate_state.current_symbol) == "number" then
+        for index = clamped_progress + 1, #address do
+            if address[index] == gate_state.current_symbol then
+                return {
+                    index = index,
+                    exact = true,
+                }
+            end
+        end
     end
 
-    for index, symbol in ipairs(address) do
-        if symbol == gate_state.current_symbol then
-            return index
-        end
+    if clamped_progress < #address then
+        return {
+            index = clamped_progress + 1,
+            exact = false,
+        }
     end
 
     return nil
@@ -1131,8 +1145,8 @@ end
 ---@param row integer
 ---@param address integer[]
 ---@param engaged_progress integer
----@param current_index integer?
-local function render_outgoing_address_progress(terminal, width, row, address, engaged_progress, current_index)
+---@param highlight SgcOutgoingProgressHighlight?
+local function render_outgoing_address_progress(terminal, width, row, address, engaged_progress, highlight)
     local line_prefix = "Address: "
     if not monitor_supports_color(terminal) or type(colors) ~= "table" then
         write_monitor_line(terminal, width, row, line_prefix .. format_address(address))
@@ -1146,11 +1160,12 @@ local function render_outgoing_address_progress(terminal, width, row, address, e
     end
 
     local engaged_color = colors.lime or colors.white
-    local current_color = colors.yellow or engaged_color
-    local pending_color = colors.lightGray or colors.white
+    local exact_current_color = colors.yellow or engaged_color
+    local inferred_current_color = colors.orange or exact_current_color
+    local pending_color = colors.gray or colors.lightGray or colors.white
     local separator_color = colors.white
     local clamped_progress = math.max(0, math.min(engaged_progress, #address))
-    local highlighted_index = type(current_index) == "number" and current_index or nil
+    local highlighted_index = type(highlight) == "table" and highlight.index or nil
     local written = 0
 
     terminal.setCursorPos(1, row)
@@ -1176,7 +1191,7 @@ local function render_outgoing_address_progress(terminal, width, row, address, e
         if index <= clamped_progress then
             symbol_color = engaged_color
         elseif highlighted_index == index then
-            symbol_color = current_color
+            symbol_color = highlight.exact == true and exact_current_color or inferred_current_color
         end
         set_monitor_text_color(terminal, symbol_color)
         terminal.write(clipped_symbol)
@@ -1295,16 +1310,18 @@ local function render_monitor(runtime)
     if page == "dialing_out" then
         local address = target_address(runtime)
         local engaged_progress = engaged_outgoing_progress(runtime, address)
-        local current_index = current_outgoing_symbol_index(runtime, address)
+        local highlight = outgoing_progress_highlight(runtime, address, engaged_progress)
         progress_signature = table.concat(address, ",")
             .. "|"
             .. tostring(engaged_progress)
             .. "|"
-            .. tostring(current_index)
+            .. tostring(highlight ~= nil and highlight.index or nil)
+            .. "|"
+            .. tostring(highlight ~= nil and highlight.exact or nil)
             .. "|"
             .. tostring(width)
         if session.last_progress_signature ~= progress_signature then
-            render_outgoing_address_progress(terminal, width, 5, address, engaged_progress, current_index)
+            render_outgoing_address_progress(terminal, width, 5, address, engaged_progress, highlight)
         end
     end
 
@@ -1981,7 +1998,6 @@ local function start_legacy(config, logger)
     end
 
     ui_term.header("Dial Console")
-    print("Destinations")
     for index, destination in ipairs(destinations) do
         print(string.format("%d. %s", index, destination.name))
     end
