@@ -712,6 +712,9 @@ local function save_update_state(state_path, manifest)
         managed_paths = manifest.managed_paths,
         files = state_files,
     }
+    if type(manifest.display_version) == "string" and manifest.display_version ~= "" then
+        state.display_version = manifest.display_version
+    end
 
     local content = "return " .. textutils.serialize(state, { compact = false }) .. "\n"
     return write_file(state_path, content)
@@ -734,6 +737,12 @@ local function validate_manifest(manifest)
 
     if type(manifest.managed_paths) ~= "table" then
         return false, "manifest.managed_paths was missing"
+    end
+
+    if manifest.display_version ~= nil
+        and (type(manifest.display_version) ~= "string" or manifest.display_version == "")
+    then
+        return false, "manifest.display_version was invalid"
     end
 
     for _, file_record in ipairs(manifest.files) do

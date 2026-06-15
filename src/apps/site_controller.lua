@@ -7,7 +7,7 @@ local app = {}
 ---@return SgcResult
 function app.run(config)
     local logger = shared.logger("app.site_controller", config)
-    logger:info("Starting: " .. tostring(config.role))
+    shared.log_start(logger)
     return shared.as_result(site_controller.serve(config, logger))
 end
 

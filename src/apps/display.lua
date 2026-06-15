@@ -6,9 +6,7 @@ local app = {}
 ---@param config table
 ---@return SgcResult
 function app.run(config)
-    shared.logger("app.display", config):info("starting", {
-        site = config.site,
-    })
+    shared.log_start(shared.logger("app.display", config))
 
     local cached = address_book_client.start(config)
     return shared.as_result({
@@ -19,4 +17,3 @@ function app.run(config)
 end
 
 return app
-

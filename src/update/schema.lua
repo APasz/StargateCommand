@@ -96,6 +96,9 @@ function schema.validate_manifest(manifest)
 
     validate.expect_string(errors, "manifest.source_kind", manifest.source_kind, false)
     validate.expect_string(errors, "manifest.revision", manifest.revision, false)
+    if manifest.display_version ~= nil then
+        validate.expect_string(errors, "manifest.display_version", manifest.display_version, false)
+    end
     validate.expect_string(errors, "manifest.generated_at", manifest.generated_at, false)
 
     if manifest.source_ref ~= nil then
@@ -175,6 +178,9 @@ function schema.validate_state(state)
     end
 
     validate.expect_string(errors, "state.revision", state.revision, false)
+    if state.display_version ~= nil then
+        validate.expect_string(errors, "state.display_version", state.display_version, false)
+    end
 
     if validate.expect_string_array(errors, "state.managed_paths", state.managed_paths) then
         for index, managed_path in ipairs(state.managed_paths) do

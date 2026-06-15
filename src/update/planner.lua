@@ -1,4 +1,5 @@
 local result = require("core.result")
+local version = require("update.version")
 
 local planner = {}
 
@@ -90,6 +91,11 @@ function planner.build_state(manifest)
         schema = 1,
         channel = manifest.channel,
         revision = manifest.revision,
+        display_version = version.resolve_display_version(
+            manifest.channel,
+            manifest.revision,
+            manifest.display_version
+        ),
         managed_paths = manifest.managed_paths,
         files = files,
     }

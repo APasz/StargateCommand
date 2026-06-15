@@ -104,6 +104,7 @@ class ChannelManifest:
     channel: str
     source_kind: SourceKind
     revision: str
+    display_version: str
     generated_at: str
     managed_paths: tuple[str, ...]
     files: tuple[FileRecord, ...]
@@ -115,6 +116,7 @@ class ChannelManifest:
             "channel": self.channel,
             "source_kind": self.source_kind.value,
             "revision": self.revision,
+            "display_version": self.display_version,
             "generated_at": self.generated_at,
             "managed_paths": list(self.managed_paths),
             "files": [dataclasses.asdict(record) for record in self.files],
@@ -342,6 +344,11 @@ def _copy_file(source: pathlib.Path, target: pathlib.Path) -> None:
     shutil.copy2(source, target)
 
 
+def _ensure_not_symlink(path: pathlib.Path, logical_path: str) -> None:
+    if path.is_symlink():
+        raise MirrorError(f"Refusing to export symlinked path: {logical_path}")
+
+
 def _file_sha256(path: pathlib.Path) -> str:
     digest = hashlib.sha256()
     with path.open("rb") as handle:
@@ -375,14 +382,16 @@ def _copy_deploy_entries(entries: tuple[DeployEntry, ...], source_root: pathlib.
         source_path = source_root / entry.pathspec
         if not source_path.exists():
             raise MirrorError(f"Deploy entry not found in source tree: {entry.pathspec}")
+        _ensure_not_symlink(source_path, entry.pathspec)
 
         if entry.is_directory:
             if not source_path.is_dir():
                 raise MirrorError(f"Deploy entry is not a directory: {entry.pathspec}")
             for file_path in sorted(source_path.rglob("*")):
+                relative_path = file_path.relative_to(source_root).as_posix()
+                _ensure_not_symlink(file_path, relative_path)
                 if not file_path.is_file():
                     continue
-                relative_path = file_path.relative_to(source_root).as_posix()
                 if relative_path in copied_paths:
                     raise MirrorError(f"Deploy manifest would export the same file twice: {relative_path}")
                 copied_paths.add(relative_path)
@@ -404,6 +413,8 @@ def _extract_tar_bytes(archive_bytes: bytes, output_root: pathlib.Path) -> None:
                 raise MirrorError(f"Refusing to extract unsafe archive member: {member.name}")
             if member.isdir():
                 continue
+            if not member.isreg():
+                raise MirrorError(f"Refusing to extract non-regular archive member: {member.name}")
             extracted = archive.extractfile(member)
             if extracted is None:
                 raise MirrorError(f"Unable to extract archive member: {member.name}")
@@ -416,6 +427,36 @@ def _extract_tar_bytes(archive_bytes: bytes, output_root: pathlib.Path) -> None:
 def _write_json(path: pathlib.Path, payload: dict[str, object]) -> None:
     _ensure_directory(path.parent)
     path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+
+def _resolve_stable_build_number() -> str | None:
+    for env_name in ("SGC_STABLE_BUILD_NUMBER", "GITHUB_RUN_NUMBER"):
+        raw_value = os.environ.get(env_name)
+        if raw_value is None or raw_value == "":
+            continue
+        if re.fullmatch(r"[0-9]+", raw_value) is None:
+            raise MirrorError(f"{env_name} must be digits only when set: {raw_value}")
+        return raw_value
+    return None
+
+
+def _short_revision(revision: str, length: int) -> str:
+    if length < 1:
+        raise ValueError(f"length must be positive: {length}")
+    return revision[:length] if len(revision) > length else revision
+
+
+def _build_display_version(channel_name: str, revision: str) -> str:
+    if channel_name == "stable":
+        stable_build_number = _resolve_stable_build_number()
+        if stable_build_number is not None:
+            return f"B{stable_build_number}"
+        return f"B-local-{_short_revision(revision, 7)}"
+
+    if channel_name == "dev":
+        return f"D{_short_revision(revision, 3)}"
+
+    return f"{channel_name}@{_short_revision(revision, 7)}"
 
 
 def _build_manifest(
@@ -435,11 +476,38 @@ def _build_manifest(
         channel=channel_name,
         source_kind=source_kind,
         revision=revision,
+        display_version=_build_display_version(channel_name, revision),
         generated_at=dt.datetime.now(dt.UTC).isoformat(timespec="seconds"),
         managed_paths=tuple(entry.path for entry in deploy_entries),
         files=files,
         source_ref=source_ref,
     )
+
+
+def _remove_tree_if_present(path: pathlib.Path) -> None:
+    if path.exists():
+        shutil.rmtree(path)
+
+
+def _publish_channel_snapshot(channel_root: pathlib.Path, temp_root: pathlib.Path) -> None:
+    published_root = channel_root.parent / f".{channel_root.name}.next"
+    backup_root = channel_root.parent / f".{channel_root.name}.previous"
+
+    _remove_tree_if_present(published_root)
+    _remove_tree_if_present(backup_root)
+    os.replace(temp_root, published_root)
+
+    if channel_root.exists():
+        os.replace(channel_root, backup_root)
+
+    try:
+        os.replace(published_root, channel_root)
+    except Exception:
+        if backup_root.exists() and not channel_root.exists():
+            os.replace(backup_root, channel_root)
+        raise
+
+    _remove_tree_if_present(backup_root)
 
 
 def _refresh_workspace_channel(
@@ -531,10 +599,7 @@ def _refresh_channel(
             )
 
         _write_json(temp_root / "manifest.json", manifest.to_json())
-
-        if channel_root.exists():
-            shutil.rmtree(channel_root)
-        shutil.move(str(temp_root), str(channel_root))
+        _publish_channel_snapshot(channel_root, temp_root)
 
     return manifest
 

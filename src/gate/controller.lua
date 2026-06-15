@@ -8,6 +8,7 @@ local gate_interface = require("gate.interface")
 local gate_message = require("gate.message")
 local gate_state = require("gate.state")
 local host_lifecycle = require("lifecycle.host")
+local log_messages = require("core.log_messages")
 local envelope = require("net.envelope")
 local net_inbox = require("net.inbox")
 local protocols = require("net.protocols")
@@ -856,10 +857,7 @@ function controller.serve(config, logger)
         active_logger:warn("failed to broadcast hello", announced.details)
     end
 
-    active_logger:info("Ready: " .. tostring(config.role), {
-        interface_type = runtime.interface.interface_type,
-        startup_reset = runtime.startup_reset ~= nil and runtime.startup_reset.reset_performed == true or false,
-    })
+    active_logger:info(log_messages.ready())
     local published = publish_state(config, runtime, active_logger, true)
     if not published.ok then
         active_logger:warn("gate state publish failed", {

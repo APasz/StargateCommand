@@ -6,6 +6,7 @@ local constants = require("core.constants")
 local discovery = require("net.discovery")
 local host_lifecycle = require("lifecycle.host")
 local net_inbox = require("net.inbox")
+local log_messages = require("core.log_messages")
 local result = require("core.result")
 local store = require("address_book.store")
 local transport = require("net.rednet_transport")
@@ -177,9 +178,7 @@ function server.serve(config, logger)
         return opened
     end
 
-    active_logger:info("Ready: " .. tostring(config.role), {
-        path = started.value.path,
-    })
+    active_logger:info(log_messages.ready())
     local announced = discovery.announce(config, {
         services = { config.role },
     })

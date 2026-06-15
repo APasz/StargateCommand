@@ -9,6 +9,7 @@ local discovery = require("net.discovery")
 local gate_message = require("gate.message")
 local host_lifecycle = require("lifecycle.host")
 local lifecycle_message = require("lifecycle.message")
+local log_messages = require("core.log_messages")
 local envelope = require("net.envelope")
 local net_inbox = require("net.inbox")
 local protocols = require("net.protocols")
@@ -1174,7 +1175,7 @@ function controller.serve(config, logger)
         end
     end
 
-    active_logger:info("Ready: " .. tostring(config.role))
+    active_logger:info(log_messages.ready())
     render_monitor(config, runtime)
     local published = publish_site_status(config, runtime, true)
     if not published.ok then

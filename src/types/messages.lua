@@ -145,6 +145,7 @@
 ---@field channel string
 ---@field source_kind string
 ---@field revision string
+---@field display_version string?
 ---@field generated_at string
 ---@field managed_paths string[]
 ---@field files SgcUpdateManifestFile[]
@@ -158,6 +159,7 @@
 ---@field schema integer
 ---@field channel string
 ---@field revision string
+---@field display_version string?
 ---@field managed_paths string[]
 ---@field files table<string, SgcUpdateStateFile>
 

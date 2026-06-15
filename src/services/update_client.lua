@@ -3,6 +3,7 @@ local result = require("core.result")
 local planner = require("update.planner")
 local update_schema = require("update.schema")
 local update_store = require("update.store")
+local update_version = require("update.version")
 
 local update_client = {}
 
@@ -343,6 +344,16 @@ local function resolve_update_config(config)
     }
 end
 
+---@param manifest SgcUpdateManifest
+---@return string?
+local function resolve_manifest_display_version(manifest)
+    return update_version.resolve_display_version(
+        manifest.channel,
+        manifest.revision,
+        manifest.display_version
+    )
+end
+
 ---@param update_config SgcUpdateConfig
 ---@return SgcResult
 local function load_manifest(update_config)
@@ -491,9 +502,11 @@ local function run_sync(update_config, manifest, state, logger)
 
     local plan = plan_result.value
     if not plan.has_changes then
+        local display_version = resolve_manifest_display_version(manifest)
         logger:debug("update already current", {
             channel = manifest.channel,
             revision = manifest.revision,
+            display_version = display_version,
         })
 
         return result.ok({
@@ -501,6 +514,7 @@ local function run_sync(update_config, manifest, state, logger)
             available = false,
             applied = false,
             revision = manifest.revision,
+            display_version = display_version,
             downloads = 0,
             deletes = 0,
             reboot_required = false,
@@ -508,9 +522,11 @@ local function run_sync(update_config, manifest, state, logger)
         })
     end
 
+    local display_version = resolve_manifest_display_version(manifest)
     logger:info("update available", {
         channel = manifest.channel,
         revision = manifest.revision,
+        display_version = display_version,
         downloads = #plan.downloads,
         deletes = #plan.deletes,
     })
@@ -521,6 +537,7 @@ local function run_sync(update_config, manifest, state, logger)
             available = true,
             applied = false,
             revision = manifest.revision,
+            display_version = display_version,
             downloads = #plan.downloads,
             deletes = #plan.deletes,
             reboot_required = false,
@@ -550,6 +567,7 @@ local function run_sync(update_config, manifest, state, logger)
         available = true,
         applied = true,
         revision = manifest.revision,
+        display_version = display_version,
         downloads = #plan.downloads,
         deletes = #plan.deletes,
         reboot_required = true,
@@ -580,6 +598,7 @@ local function execute_update(config, logger)
             available = false,
             applied = false,
             revision = nil,
+            display_version = nil,
             downloads = 0,
             deletes = 0,
             reboot_required = false,
@@ -625,6 +644,7 @@ function update_client.preflight(config, logger)
     if details.applied and resolve_update_config(config).auto_reboot and os ~= nil and type(os.reboot) == "function" then
         normalize_logger(logger):warn("rebooting after update", {
             revision = details.revision,
+            display_version = details.display_version,
         })
         os.reboot()
         details.reboot_requested = true

@@ -4037,6 +4037,7 @@ do
         channel = "stable",
         source_kind = "workspace",
         revision = "abc123",
+        display_version = "B142",
         generated_at = "2026-06-12T00:00:00+00:00",
         managed_paths = {
             "startup.lua",
@@ -4059,6 +4060,13 @@ do
     local manifest_validation = update_schema.validate_manifest(manifest)
     if not manifest_validation.ok then
         io.stderr:write("Update manifest validation failed\n")
+        os.exit(1)
+    end
+
+    local planned_state = update_planner.build_state(manifest)
+    local planned_state_validation = update_schema.validate_state(planned_state)
+    if not planned_state_validation.ok or planned_state.display_version ~= "B142" then
+        io.stderr:write("Update planner state version propagation failed\n")
         os.exit(1)
     end
 

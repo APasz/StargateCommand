@@ -14,14 +14,6 @@
       }
     },
     {
-      "name": "testing",
-      "source": {
-        "kind": "git_remote",
-        "remote": "git@github.com:your-org/StargateCommand-testing.git",
-        "ref": "main"
-      }
-    },
-    {
       "name": "dev",
       "source": {
         "kind": "workspace",

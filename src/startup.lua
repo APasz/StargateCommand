@@ -3,8 +3,11 @@ local config_defaults = require("config.default")
 local config_schema = require("config.schema")
 local host_lifecycle = require("lifecycle.host")
 local log = require("core.log")
+local log_messages = require("core.log_messages")
 local main = require("main")
 local update_client = require("services.update_client")
+local update_store = require("update.store")
+local update_version = require("update.version")
 
 local startup = {}
 
@@ -123,6 +126,33 @@ function startup.load_local_config(paths)
     }
 end
 
+---@param config table
+---@return table?
+local function load_installed_version_fields(config)
+    local state_path = constants.DEFAULT_UPDATE_STATE_PATH
+    if config.update ~= nil and type(config.update.state_path) == "string" and config.update.state_path ~= "" then
+        state_path = config.update.state_path
+    end
+
+    local loaded_state = update_store.load_optional(state_path)
+    if not loaded_state.ok or loaded_state.value == nil then
+        return nil
+    end
+
+    local state = loaded_state.value
+    local fields = {
+        channel = state.channel,
+        revision = state.revision,
+        version = update_version.resolve_display_version(
+            state.channel,
+            state.revision,
+            state.display_version
+        ),
+    }
+
+    return fields
+end
+
 ---@return boolean
 function startup.run()
     if not disable_motd() then
@@ -157,6 +187,22 @@ function startup.run()
     if update_result.value.applied then
         return fail("update applied; reboot required", update_result.value)
     end
+
+    local startup_logger = log.new(
+        "startup",
+        config.logging ~= nil and config.logging.level or "info"
+    )
+    local startup_fields = {
+        role = config.role,
+        site = config.site,
+    }
+    local installed_version_fields = load_installed_version_fields(config)
+    if installed_version_fields ~= nil then
+        startup_fields.channel = installed_version_fields.channel
+        startup_fields.revision = installed_version_fields.revision
+        startup_fields.version = installed_version_fields.version
+    end
+    startup_logger:info(log_messages.startup(startup_fields.version, config.site))
 
     local run_result = main.run(config)
     if not run_result.ok then

@@ -77,7 +77,6 @@ All relative paths in the mirror config are resolved relative to the config file
 The example uses:
 
 - `stable` -> public GitHub over HTTPS
-- `testing` -> private GitHub over SSH
 - `dev` -> current workspace with git-head revision stamping
 
 For private GitHub access, use the host's normal Git authentication path such as:
@@ -107,6 +106,19 @@ Refresh first, then serve:
 ```bash
 python3 tools/update_mirror.py --config examples/update_mirror.example.json serve --refresh
 ```
+
+## GitHub Actions Stable Snapshot
+
+The repository now includes [.github/workflows/stable-snapshot.yml](/lamda/Lager/0/Codes/StargateCommand/.github/workflows/stable-snapshot.yml:1).
+
+It does two things:
+
+- runs the Python and Lua checks on pull requests and main-branch pushes
+- on `main` pushes or manual dispatch, builds a `stable` update snapshot artifact
+
+That workflow sets `SGC_STABLE_BUILD_NUMBER` from GitHub's `run_number`, so the generated stable manifest gets a `display_version` like `B142`.
+
+The checked-in workflow mirror config lives at [.github/update_mirror.stable.json](/lamda/Lager/0/Codes/StargateCommand/.github/update_mirror.stable.json:1) and uses the current checkout as the stable source for that artifact build.
 
 ## In-Game Client
 

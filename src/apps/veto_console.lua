@@ -5,9 +5,7 @@ local app = {}
 ---@param config table
 ---@return SgcResult
 function app.run(config)
-    shared.logger("app.veto_console", config):info("starting", {
-        site = config.site,
-    })
+    shared.log_start(shared.logger("app.veto_console", config))
     return shared.as_result({
         role = config.role,
         can_initiate = false,
@@ -16,4 +14,3 @@ function app.run(config)
 end
 
 return app
-

@@ -7,7 +7,7 @@ local app = {}
 ---@return SgcResult
 function app.run(config)
     local logger = shared.logger("app.dial_console", config)
-    logger:info("Starting: " .. tostring(config.role))
+    shared.log_start(logger)
 
     return shared.as_result(dial_console.start(config, logger))
 end

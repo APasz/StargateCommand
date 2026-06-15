@@ -1,0 +1,17 @@
+{
+    "schema": 1,
+    "bind": "127.0.0.1",
+    "port": 8090,
+    "snapshot_root": "../dist/update_mirror",
+    "deploy_manifest": "../tools/deploy_manifest.txt",
+    "channels": [
+        {
+            "name": "stable",
+            "source": {
+                "kind": "workspace",
+                "root": "..",
+                "revision_mode": "git_head"
+            }
+        }
+    ]
+}

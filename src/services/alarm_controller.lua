@@ -12,6 +12,7 @@ local gate_event = require("gate.event")
 local gate_message = require("gate.message")
 local host_lifecycle = require("lifecycle.host")
 local net_inbox = require("net.inbox")
+local log_messages = require("core.log_messages")
 local result = require("core.result")
 local site_message = require("site.message")
 local tablex = require("core.tablex")
@@ -767,12 +768,7 @@ function alarm_controller.start(config, logger)
         return initial
     end
 
-    active_logger:info("Ready: " .. tostring(config.role), {
-        upstream = "gate_controller+site_controller",
-        outputs = #runtime.alarm.outputs,
-        speaker_bindings = #runtime.speaker.bindings,
-        bundled_supported = redstone ~= nil and type(redstone.setBundledOutput) == "function",
-    })
+    active_logger:info(log_messages.ready())
     local announced = discovery.announce(config, {
         services = { config.role },
     })

@@ -7,7 +7,7 @@ local app = {}
 ---@return SgcResult
 function app.run(config)
     local logger = shared.logger("app.alarm_controller", config)
-    logger:info("Starting: " .. tostring(config.role))
+    shared.log_start(logger)
     return shared.as_result(alarm_controller.start(config, logger))
 end
 

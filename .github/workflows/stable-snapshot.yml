@@ -1,0 +1,66 @@
+name: Stable Snapshot
+
+on:
+  pull_request:
+    branches:
+      - main
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install Lua
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y lua5.4
+
+      - name: Run Python tests
+        run: python3 -m unittest tests.test_update_mirror
+
+      - name: Run Lua checks
+        run: lua5.4 tools/check.lua
+
+  build_stable_snapshot:
+    name: Build stable snapshot artifact
+    runs-on: ubuntu-latest
+    needs:
+      - validate
+    if: github.event_name != 'pull_request'
+    env:
+      SGC_STABLE_BUILD_NUMBER: ${{ github.run_number }}
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Build stable snapshot
+        run: python3 tools/update_mirror.py --config .github/update_mirror.stable.json refresh
+
+      - name: Upload stable snapshot artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: stable-snapshot-B${{ github.run_number }}
+          path: dist/update_mirror/channels/stable
+          if-no-files-found: error
+          retention-days: 30
