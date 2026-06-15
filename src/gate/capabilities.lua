@@ -11,6 +11,10 @@ local CAPABILITY_MAP = {
         state = true,
         disconnect = true,
         iris = true,
+        direct_dial = false,
+        stargate_info = true,
+        rotation = true,
+        chevron = true,
     },
     crystal_interface = {
         energy = true,
@@ -20,6 +24,10 @@ local CAPABILITY_MAP = {
         state = true,
         disconnect = true,
         iris = true,
+        direct_dial = true,
+        stargate_info = true,
+        rotation = true,
+        chevron = true,
     },
     advanced_crystal_interface = {
         energy = true,
@@ -29,6 +37,10 @@ local CAPABILITY_MAP = {
         state = true,
         disconnect = true,
         iris = true,
+        direct_dial = true,
+        stargate_info = true,
+        rotation = true,
+        chevron = true,
     },
 }
 
@@ -39,4 +51,3 @@ function capabilities.for_type(interface_type)
 end
 
 return capabilities
-

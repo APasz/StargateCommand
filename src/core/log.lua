@@ -38,8 +38,7 @@ function log.new(component, min_level)
             return
         end
 
-        local line =
-            string.format("[%d] [%s] [%s] %s", time.now_ms(), string.upper(level), component, message)
+        local line = string.format("%s | %s | %s\n%s", time.now_hms(), string.upper(level), component, message)
             .. serialize_fields(fields)
 
         if level == "error" and type(printError) == "function" then
@@ -70,4 +69,3 @@ function log.new(component, min_level)
 end
 
 return log
-

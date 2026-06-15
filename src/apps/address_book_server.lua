@@ -6,11 +6,9 @@ local app = {}
 ---@param config table
 ---@return SgcResult
 function app.run(config)
-    shared.logger("app.address_book_server", config):info("starting", {
-        site = config.site,
-    })
-    return shared.as_result(address_book_server.start(config))
+    local logger = shared.logger("app.address_book_server", config)
+    logger:info("Starting: " .. tostring(config.role))
+    return shared.as_result(address_book_server.serve(config, logger))
 end
 
 return app
-

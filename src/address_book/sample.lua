@@ -4,7 +4,7 @@ local sample = {}
 function sample.create()
     return {
         schema = 2,
-        revision = 1,
+        revision = 2,
         updated_at = 0,
         updated_by = "system",
         sites = {
@@ -32,30 +32,28 @@ function sample.create()
                 tags = { "primary", "sgc" },
                 notes = "Stargate Command site.",
             },
-            outpost_alpha = {
+            nether = {
                 enabled = true,
                 allow_outbound = true,
-                id = "outpost_alpha",
-                name = "Outpost Alpha",
+                id = "nether",
+                name = "Nether",
                 location = {
                     universe = "minecraft",
                     galaxy = "milkyway",
-                    dimension = "nether",
+                    dimension = "the_nether",
                 },
                 addresses = {
-                    system = { 9, 11, 14, 21, 22, 29 },
-                    stellar = { 9, 11, 14, 21, 22, 29, 0 },
+                    system = { 27, 23, 4, 34, 12, 28 },
+                    stellar = nil,
                     galactic = nil,
                 },
                 visibility = {
                     listed = true,
                     hidden_at = nil,
                     visible_from = nil,
-                    intergalactic = nil,
+                    intergalactic = {},
                 },
-                tags = { "outpost" },
-                notes = "Small test outpost.",
-            },
+            }
         },
     }
 end

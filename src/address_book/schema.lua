@@ -40,9 +40,8 @@ end
 
 ---@param refs string[]?
 ---@param path string
----@param site_ids table<string, boolean>
 ---@param errors table[]
-local function validate_refs(refs, path, site_ids, errors)
+local function validate_refs(refs, path, errors)
     if refs == nil then
         return
     end
@@ -52,8 +51,8 @@ local function validate_refs(refs, path, site_ids, errors)
     end
 
     for index, ref in ipairs(refs) do
-        if ref ~= "*" and not site_ids[ref] then
-            validate.push_error(errors, path .. "[" .. index .. "]", "unknown site reference")
+        if ref ~= "*" and not validate.is_site_id(ref) then
+            validate.push_error(errors, path .. "[" .. index .. "]", "expected site id or *")
         end
     end
 end
@@ -89,9 +88,8 @@ end
 ---@param path string
 ---@param site_id string
 ---@param site SgcSiteEntry
----@param site_ids table<string, boolean>
 ---@param errors table[]
-local function validate_site(path, site_id, site, site_ids, errors)
+local function validate_site(path, site_id, site, errors)
     if not validate.expect_table(errors, path, site) then
         return
     end
@@ -115,9 +113,9 @@ local function validate_site(path, site_id, site, site_ids, errors)
 
     if validate.expect_table(errors, path .. ".visibility", site.visibility) then
         validate.expect_boolean(errors, path .. ".visibility.listed", site.visibility.listed)
-        validate_refs(site.visibility.hidden_at, path .. ".visibility.hidden_at", site_ids, errors)
-        validate_refs(site.visibility.visible_from, path .. ".visibility.visible_from", site_ids, errors)
-        validate_refs(site.visibility.intergalactic, path .. ".visibility.intergalactic", site_ids, errors)
+        validate_refs(site.visibility.hidden_at, path .. ".visibility.hidden_at", errors)
+        validate_refs(site.visibility.visible_from, path .. ".visibility.visible_from", errors)
+        validate_refs(site.visibility.intergalactic, path .. ".visibility.intergalactic", errors)
     end
 
     if site.tags ~= nil then
@@ -163,7 +161,7 @@ function schema.validate(book)
     end
 
     for site_id, site in pairs(normalized.sites) do
-        validate_site("address_book.sites." .. site_id, site_id, site, site_ids, errors)
+        validate_site("address_book.sites." .. site_id, site_id, site, errors)
     end
 
     local validation = validate.result(errors)
@@ -175,4 +173,3 @@ function schema.validate(book)
 end
 
 return schema
-

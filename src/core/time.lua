@@ -24,5 +24,16 @@ function time.now_seconds()
     return math.floor(time.now_ms() / 1000)
 end
 
-return time
+---@return string
+function time.now_hms()
+    local now_ms = time.now_ms()
+    local total_seconds = math.floor(now_ms / 1000)
+    local seconds_in_day = 24 * 60 * 60
+    local day_seconds = total_seconds % seconds_in_day
+    local hours = math.floor(day_seconds / 3600)
+    local minutes = math.floor((day_seconds % 3600) / 60)
+    local seconds = day_seconds % 60
+    return string.format("%02d:%02d:%02d", hours, minutes, seconds)
+end
 
+return time

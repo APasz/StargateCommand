@@ -5,6 +5,12 @@ local result = require("core.result")
 local validate = require("core.validate")
 
 local transport = {}
+local NONFATAL_RECEIVE_ERRORS = {
+    unexpected_protocol = true,
+    invalid_message_body = true,
+    sender_not_allowed = true,
+    validation_failed = true,
+}
 
 ---@return SgcResult
 local function ensure_rednet()
@@ -130,26 +136,12 @@ local function protocol_allowed(accepted_protocols, protocol_name)
 end
 
 ---@param config table
----@param timeout number?
+---@param sender_id any
+---@param message any
+---@param protocol_name any
 ---@param accepted_protocols string[]?
 ---@return SgcResult
-function transport.receive(config, timeout, accepted_protocols)
-    local available = ensure_rednet()
-    if not available.ok then
-        return available
-    end
-
-    local ok, sender_id, message, protocol_name = pcall(rednet.receive, nil, timeout)
-    if not ok then
-        return result.err("rednet_receive_failed", {
-            cause = tostring(sender_id),
-        })
-    end
-
-    if sender_id == nil then
-        return result.err("receive_timeout")
-    end
-
+function transport.parse_received_message(config, sender_id, message, protocol_name, accepted_protocols)
     if type(protocol_name) ~= "string" or not protocol_allowed(accepted_protocols, protocol_name) then
         return result.err("unexpected_protocol", {
             sender_id = sender_id,
@@ -181,5 +173,34 @@ function transport.receive(config, timeout, accepted_protocols)
     })
 end
 
-return transport
+---@param error_code string?
+---@return boolean
+function transport.is_nonfatal_receive_error(error_code)
+    return error_code ~= nil and NONFATAL_RECEIVE_ERRORS[error_code] == true
+end
 
+---@param config table
+---@param timeout number?
+---@param accepted_protocols string[]?
+---@return SgcResult
+function transport.receive(config, timeout, accepted_protocols)
+    local available = ensure_rednet()
+    if not available.ok then
+        return available
+    end
+
+    local ok, sender_id, message, protocol_name = pcall(rednet.receive, nil, timeout)
+    if not ok then
+        return result.err("rednet_receive_failed", {
+            cause = tostring(sender_id),
+        })
+    end
+
+    if sender_id == nil then
+        return result.err("receive_timeout")
+    end
+
+    return transport.parse_received_message(config, sender_id, message, protocol_name, accepted_protocols)
+end
+
+return transport

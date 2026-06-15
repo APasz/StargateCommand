@@ -1,5 +1,7 @@
 local constants = require("core.constants")
+local config_defaults = require("config.default")
 local config_schema = require("config.schema")
+local host_lifecycle = require("lifecycle.host")
 local log = require("core.log")
 local main = require("main")
 local update_client = require("services.update_client")
@@ -52,6 +54,31 @@ local function fail(message, details)
     return false
 end
 
+---@return boolean
+local function disable_motd()
+    if settings == nil or type(settings.set) ~= "function" then
+        return true
+    end
+
+    local set_ok, set_error = pcall(settings.set, "motd.enable", false)
+    if not set_ok then
+        return fail("failed to disable motd", {
+            cause = tostring(set_error),
+        })
+    end
+
+    if type(settings.save) == "function" then
+        local save_ok, save_error = pcall(settings.save)
+        if not save_ok then
+            return fail("failed to save settings", {
+                cause = tostring(save_error),
+            })
+        end
+    end
+
+    return true
+end
+
 ---@param path string
 ---@return table?, any
 local function load_config_file(path)
@@ -81,7 +108,13 @@ function startup.load_local_config(paths)
                 return nil, path, validation
             end
 
-            return validation.value, path, nil
+            local normalized = config_defaults.for_role(validation.value.role, validation.value)
+            local normalized_validation = config_schema.validate(normalized)
+            if not normalized_validation.ok then
+                return nil, path, normalized_validation
+            end
+
+            return normalized_validation.value, path, nil
         end
     end
 
@@ -92,6 +125,10 @@ end
 
 ---@return boolean
 function startup.run()
+    if not disable_motd() then
+        return false
+    end
+
     local config, loaded_path, load_error = startup.load_local_config()
     if config == nil then
         if loaded_path ~= nil then
@@ -107,6 +144,11 @@ function startup.run()
         "startup.update",
         config.logging ~= nil and config.logging.level or "info"
     )
+    local cleared_intent = host_lifecycle.consume_pending_intent(config)
+    if not cleared_intent.ok then
+        return fail("failed to clear pending lifecycle intent", cleared_intent.details)
+    end
+
     local update_result = update_client.preflight(config, update_logger)
     if not update_result.ok then
         return fail("startup update failed: " .. update_result.error, update_result.details)

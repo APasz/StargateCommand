@@ -11,7 +11,7 @@ return {
         mode = "client",
         cache_path = "/sgc/cache/address_book.lua",
         server_site = "command",
-        server_path = "/sgc/data/address_book.lua",
+        server_path = "/sgc/data/address_book.json",
     },
     security = {
         allowlist_enabled = false,

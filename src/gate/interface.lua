@@ -140,6 +140,71 @@ end
 
 ---@param instance table
 ---@return SgcResult
+function gate_interface.get_chevrons_engaged(instance)
+    return call_supported(instance, "stargate_info", "getChevronsEngaged")
+end
+
+---@param instance table
+---@return SgcResult
+function gate_interface.get_stargate_generation(instance)
+    return call_supported(instance, "stargate_info", "getStargateGeneration")
+end
+
+---@param instance table
+---@param symbol integer
+---@return SgcResult
+function gate_interface.engage_symbol(instance, symbol)
+    return call_supported(instance, "direct_dial", "engageSymbol", symbol)
+end
+
+---@param instance table
+---@param symbol integer
+---@return SgcResult
+function gate_interface.get_current_symbol(instance)
+    return call_supported(instance, "rotation", "getCurrentSymbol")
+end
+
+---@param instance table
+---@param symbol integer
+---@return SgcResult
+function gate_interface.rotate_anti_clockwise(instance, symbol)
+    return call_supported(instance, "rotation", "rotateAntiClockwise", symbol)
+end
+
+---@param instance table
+---@param symbol integer
+---@return SgcResult
+function gate_interface.rotate_clockwise(instance, symbol)
+    return call_supported(instance, "rotation", "rotateClockwise", symbol)
+end
+
+---@param instance table
+---@param symbol integer
+---@return SgcResult
+function gate_interface.is_current_symbol(instance, symbol)
+    return call_supported(instance, "rotation", "isCurrentSymbol", symbol)
+end
+
+---@param instance table
+---@return SgcResult
+function gate_interface.encode_chevron(instance)
+    return call_supported(instance, "chevron", "encodeChevron")
+end
+
+---@param instance table
+---@return SgcResult
+function gate_interface.open_chevron(instance)
+    return call_supported(instance, "chevron", "openChevron")
+end
+
+---@param instance table
+---@return SgcResult
+function gate_interface.close_chevron(instance)
+    return call_supported(instance, "chevron", "closeChevron")
+end
+
+---@param instance table
+---@return SgcResult
 function gate_interface.get_iris(instance)
     return call_supported(instance, "iris", "getIris")
 end
@@ -175,4 +240,3 @@ function gate_interface.get_iris_progress_percent(instance)
 end
 
 return gate_interface
-

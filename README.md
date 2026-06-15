@@ -54,12 +54,15 @@ The current scaffolding includes allowlist hooks and auth extension points, but 
 The address book is treated as live in-game state, not GitHub-managed content.
 
 - One `address_book_server` is authoritative
+- The authoritative source of truth defaults to `/sgc/data/address_book.json`
 - Site controllers cache the latest revision locally
 - Sites prefer the central service when reachable
 - Sites fall back to local cache when central is unavailable
 - Remote proposals are possible later, but central approval remains authoritative
 
 Visibility logic is centralized in the `address_book` module so UI code does not need to duplicate rules.
+
+On a dedicated address-book computer, the standard generated config now seeds `/sgc/data/address_book.json` from the built-in sample on first startup. The running `address_book` app also exposes a local terminal console with `list`, `add <site_id>`, `edit <site_id>`, `del <site_id>`, and `push`. `push` broadcasts the latest authoritative book to `site_controller`s, and active dial consoles refresh when they observe the resulting site-status revision change.
 
 ## Config And Startup
 
@@ -175,7 +178,7 @@ What bootstrap does:
 
 The generated config is a valid full config, not just an `update` block. If you already had a partial `config.lua`, bootstrap reuses what it can and fills in the missing defaults.
 
-If you are using an address book cache path like `/sgc/cache/address_book.lua`, create the parent directories before first save if your deployment process does not already do that.
+If you are using an address book cache path like `/sgc/cache/address_book.lua` or the default authoritative path `/sgc/data/address_book.json`, create the parent directories before first save if your deployment process does not already do that.
 
 ### 4. Optional: edit the generated config later
 
@@ -227,7 +230,19 @@ python3 tools/update_mirror.py --config update_mirror.json refresh
 If `auto_reboot = false`, a successful apply stops startup and requires one manual reboot.
 If `auto_reboot = true`, the machine requests a reboot automatically after a successful apply.
 
-### 8. Common mistakes
+### 8. Host restart flow
+
+Computer restarts are now treated as a host lifecycle flow, not as a gate command.
+
+- `site_controller` can orchestrate role-targeted or site-wide host reboots
+- long-running service hosts acknowledge first, persist a reboot intent under `/sgc/state/`, then call `os.reboot()`
+- startup clears the pending reboot intent before running updates and the main app
+- site status snapshots expose maintenance fields so planned restarts can be distinguished from unexplained faults
+- on the `site_controller`, a bundled redstone input on `back` + `black` triggers a site-wide host reboot on the rising edge
+
+This restarts ComputerCraft computers only. It does not restart the Minecraft server process.
+
+### 9. Common mistakes
 
 - Forgetting to enable the HTTP API in ComputerCraft.
 - Pointing `base_url` at the wrong host or wrong port.

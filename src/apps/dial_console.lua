@@ -1,4 +1,4 @@
-local address_book_client = require("address_book.client")
+local dial_console = require("services.dial_console")
 local shared = require("apps.shared")
 
 local app = {}
@@ -7,17 +7,9 @@ local app = {}
 ---@return SgcResult
 function app.run(config)
     local logger = shared.logger("app.dial_console", config)
-    logger:info("starting", {
-        site = config.site,
-    })
+    logger:info("Starting: " .. tostring(config.role))
 
-    local cached = address_book_client.start(config)
-    return shared.as_result({
-        role = config.role,
-        address_book = cached.ok and cached.value or nil,
-        note = "Dial UI is not implemented yet.",
-    })
+    return shared.as_result(dial_console.start(config, logger))
 end
 
 return app
-

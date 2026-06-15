@@ -7,9 +7,7 @@ local app = {}
 ---@return SgcResult
 function app.run(config)
     local logger = shared.logger("app.update_client", config)
-    logger:info("starting", {
-        site = config.site,
-    })
+    logger:info("Starting: " .. tostring(config.role))
 
     local sync_result = update_client.start(config, logger)
     if sync_result.ok then

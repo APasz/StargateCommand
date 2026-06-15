@@ -22,7 +22,7 @@ local ROLE_ORDER = {
     "iris_controller",
     "alarm_controller",
     "energy_controller",
-    "address_book_server",
+    "address_book",
     "update_client",
     "bridge",
 }
@@ -36,6 +36,7 @@ local ROLE_SET = {
     iris_controller = true,
     alarm_controller = true,
     energy_controller = true,
+    address_book = true,
     address_book_server = true,
     update_client = true,
     bridge = true,
@@ -579,21 +580,23 @@ end
 ---@param auto_reboot boolean
 ---@return table
 local function build_default_config(role, site, base_url, channel, auto_reboot)
-    local intersite_side = role == "site_controller" and "right" or nil
+    local is_address_book_role = role == "address_book" or role == "address_book_server"
+    local intersite_side = (role == "site_controller" or is_address_book_role) and "right" or nil
+    local site_modem_side = is_address_book_role and nil or "bottom"
     local address_book_mode = "client"
 
     if role == "gate_controller" or role == "bridge" or role == "update_client" then
         address_book_mode = "disabled"
-    elseif role == "address_book_server" then
+    elseif is_address_book_role then
         address_book_mode = "server"
     end
 
     return {
         schema = 2,
         site = site,
-        role = role,
+        role = role == "address_book_server" and "address_book" or role,
         modems = {
-            site = "bottom",
+            site = site_modem_side,
             peripheral = "top",
             intersite = intersite_side,
         },
@@ -601,7 +604,8 @@ local function build_default_config(role, site, base_url, channel, auto_reboot)
             mode = address_book_mode,
             cache_path = "/sgc/cache/address_book.lua",
             server_site = site,
-            server_path = "/sgc/data/address_book.lua",
+            server_path = "/sgc/data/address_book.json",
+            bootstrap_on_missing = is_address_book_role,
         },
         security = {
             allowlist_enabled = false,
@@ -618,6 +622,57 @@ local function build_default_config(role, site, base_url, channel, auto_reboot)
         },
         logging = {
             level = "info",
+        },
+        dial_console = {
+            monitor_text_scale = 1,
+        },
+        alarm = {
+            poll_interval_ms = 250,
+            monitor_text_scale = 0.5,
+            trigger_on_fault = true,
+            speaker = {
+                bindings = {
+                    {
+                        signal = "system_error",
+                        pattern = "pattern_beta",
+                    },
+                    {
+                        signal = "connection_incoming",
+                        pattern = "pattern_alpha",
+                    },
+                },
+            },
+            outputs = {
+                {
+                    driver = "redstone",
+                    side = "left",
+                    signal = "connection_established",
+                    active_high = true,
+                },
+                {
+                    driver = "redstone",
+                    side = "right",
+                    signal = "system_error",
+                    active_high = true,
+                },
+                {
+                    driver = "bundled",
+                    side = "back",
+                    channels = {
+                        orange = "connection_established",
+                        magenta = {
+                            signal = "system_error",
+                            mode = "pulse",
+                        },
+                        blue = "wormhole_incoming",
+                        green = "chevron_engaged",
+                        red = "wormhole_outgoing",
+                        lightBlue = "traveller_in",
+                        brown = "traveller_out",
+                        gray = "reset",
+                    },
+                },
+            },
         },
     }
 end

@@ -9,11 +9,19 @@ The address book is authoritative server state managed in-game.
 - no peer-to-peer merge logic
 - remote proposals can exist later, but approval is central
 
+## Persistence
+
+- the authoritative source of truth defaults to `/sgc/data/address_book.json`
+- cached books can still use the legacy serialized `.lua` path, and the server will migrate a legacy authoritative `.lua` file into the new `.json` path automatically
+- the standard `address_book_server` config now seeds the authoritative file from the built-in sample on first startup
+- the running address-book server also exposes a local terminal console for `list`, `add <site_id>`, `edit <site_id>`, `del <site_id>`, and `push`
+- `push` broadcasts the latest authoritative book to `site_controller`s; dial consoles then refresh when the updated site-status revision appears on the local network
+
 ## Schema Rules
 
 - site ids must be stable machine-readable identifiers
 - address arrays are validated by expected length
-- visibility references must point to known site ids or `*`
+- visibility references must be site ids or `*`, even if the referenced site does not exist yet
 - `hidden_at = { "*" }` hides a destination everywhere
 - `intergalactic = { "*" }` exposes a destination cross-galaxy everywhere
 
