@@ -429,17 +429,6 @@ def _write_json(path: pathlib.Path, payload: dict[str, object]) -> None:
     path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
 
-def _resolve_stable_build_number() -> str | None:
-    for env_name in ("SGC_STABLE_BUILD_NUMBER", "GITHUB_RUN_NUMBER"):
-        raw_value = os.environ.get(env_name)
-        if raw_value is None or raw_value == "":
-            continue
-        if re.fullmatch(r"[0-9]+", raw_value) is None:
-            raise MirrorError(f"{env_name} must be digits only when set: {raw_value}")
-        return raw_value
-    return None
-
-
 def _short_revision(revision: str, length: int) -> str:
     if length < 1:
         raise ValueError(f"length must be positive: {length}")
@@ -448,10 +437,7 @@ def _short_revision(revision: str, length: int) -> str:
 
 def _build_display_version(channel_name: str, revision: str) -> str:
     if channel_name == "stable":
-        stable_build_number = _resolve_stable_build_number()
-        if stable_build_number is not None:
-            return f"B{stable_build_number}"
-        return f"B-local-{_short_revision(revision, 7)}"
+        return f"B{_short_revision(revision, 7)}"
 
     if channel_name == "dev":
         return f"D{_short_revision(revision, 3)}"

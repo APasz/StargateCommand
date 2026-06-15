@@ -1,0 +1,17 @@
+{
+  "schema": 1,
+  "bind": "0.0.0.0",
+  "port": 8090,
+  "snapshot_root": "/var/lib/sgc-update-mirror",
+  "deploy_manifest": "/opt/stargate-command/tools/deploy_manifest.txt",
+  "channels": [
+    {
+      "name": "stable",
+      "source": {
+        "kind": "git_remote",
+        "remote": "https://github.com/APasz/StargateCommand.git",
+        "ref": "main"
+      }
+    }
+  ]
+}

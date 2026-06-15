@@ -32,7 +32,6 @@ This maps cleanly to the intended environments:
 
 - Debian production:
   - `stable` channel from the public GitHub repository
-  - `testing` channel from the private GitHub repository
 - Arch or EndeavourOS development:
   - `dev` channel from the current workspace checkout
   - when `revision_mode` is `git_head`, the mirror reads the local `.git` metadata to stamp the exported revision
@@ -116,9 +115,43 @@ It does two things:
 - runs the Python and Lua checks on pull requests and main-branch pushes
 - on `main` pushes or manual dispatch, builds a `stable` update snapshot artifact
 
-That workflow sets `SGC_STABLE_BUILD_NUMBER` from GitHub's `run_number`, so the generated stable manifest gets a `display_version` like `B142`.
+Stable manifests use a `display_version` like `B9c10d77`, derived from the first seven characters of the resolved Git revision.
 
 The checked-in workflow mirror config lives at [.github/update_mirror.stable.json](/lamda/Lager/0/Codes/StargateCommand/.github/update_mirror.stable.json:1) and uses the current checkout as the stable source for that artifact build.
+
+## Debian Production Example
+
+A production-oriented config example lives at [examples/update_mirror.production.json](/lamda/Lager/0/Codes/StargateCommand/examples/update_mirror.production.json:1).
+
+It assumes:
+
+- the repo checkout lives at `/opt/stargate-command`
+- served snapshots and the mirror git cache live under `/var/lib/sgc-update-mirror`
+- the mirror listens on `0.0.0.0:8090`
+- `stable` tracks `https://github.com/APasz/StargateCommand.git` on `main`
+
+The important operational detail is that `deploy_manifest.txt` and `tools/update_mirror.py` are read from the local checkout, not from the mirrored remote channel snapshot. If you want production refreshes to track repo changes cleanly, update the local checkout before each refresh.
+
+Example command:
+
+```bash
+git -C /opt/stargate-command pull --ff-only origin main
+python3 /opt/stargate-command/tools/update_mirror.py --config /etc/stargate-command/update_mirror.json refresh --channel stable
+```
+
+## systemd Units
+
+Example unit files live under [examples/systemd](/lamda/Lager/0/Codes/StargateCommand/examples/systemd/sgc-update-mirror.service:1):
+
+- [sgc-update-mirror.service](/lamda/Lager/0/Codes/StargateCommand/examples/systemd/sgc-update-mirror.service:1)
+- [sgc-update-mirror-refresh.service](/lamda/Lager/0/Codes/StargateCommand/examples/systemd/sgc-update-mirror-refresh.service:1)
+- [sgc-update-mirror-refresh.timer](/lamda/Lager/0/Codes/StargateCommand/examples/systemd/sgc-update-mirror-refresh.timer:1)
+
+Recommended production model:
+
+- run `serve` continuously under `systemd`
+- run `refresh --channel stable` separately under a timer
+- let the refresh service `git pull --ff-only` the repo checkout first so the local deploy manifest and script stay in sync with `origin/main`
 
 ## In-Game Client
 

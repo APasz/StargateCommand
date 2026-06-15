@@ -92,15 +92,14 @@ class UpdateMirrorTest(unittest.TestCase):
             )
 
             config = update_mirror.load_config(config_path)
-            with unittest.mock.patch.dict("os.environ", {"GITHUB_RUN_NUMBER": "142"}, clear=False):
-                manifests = update_mirror.refresh_mirror(config)
+            manifests = update_mirror.refresh_mirror(config)
 
             self.assertEqual(len(manifests), 1)
             manifest = manifests[0]
             self.assertEqual(manifest.channel, "stable")
             self.assertEqual(manifest.source_kind, update_mirror.SourceKind.GIT_REMOTE)
             self.assertEqual(manifest.source_ref, "HEAD")
-            self.assertEqual(manifest.display_version, "B142")
+            self.assertEqual(manifest.display_version, f"B{manifest.revision[:7]}")
             self.assertEqual(manifest.managed_paths, ("startup.lua", "src/"))
             self.assertEqual([record.path for record in manifest.files], ["src/main.lua", "startup.lua"])
 

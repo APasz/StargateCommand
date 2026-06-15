@@ -29,7 +29,7 @@ function version.resolve_display_version(channel, revision, display_version)
 
     if channel == "stable" then
         local short = short_revision(revision, DEFAULT_SHORT_REVISION_LENGTH)
-        return short ~= nil and ("B-local-" .. short) or nil
+        return short ~= nil and ("B" .. short) or nil
     end
 
     if channel == "dev" then

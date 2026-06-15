@@ -42,8 +42,6 @@ jobs:
     needs:
       - validate
     if: github.event_name != 'pull_request'
-    env:
-      SGC_STABLE_BUILD_NUMBER: ${{ github.run_number }}
 
     steps:
       - name: Check out repository
@@ -60,7 +58,7 @@ jobs:
       - name: Upload stable snapshot artifact
         uses: actions/upload-artifact@v4
         with:
-          name: stable-snapshot-B${{ github.run_number }}
+          name: stable-snapshot-${{ github.sha }}
           path: dist/update_mirror/channels/stable
           if-no-files-found: error
           retention-days: 30
