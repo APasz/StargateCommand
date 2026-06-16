@@ -2,6 +2,7 @@ local alarm_output = require("alarm.output")
 local alarm_signal = require("alarm.signal")
 local alarm_speaker = require("alarm.speaker")
 local alarm_monitor = require("alarm.monitor")
+local alarm_console = require("alarm.console")
 local command_message = require("command.message")
 local command_network = require("command.network")
 local config_defaults = require("config.default")
@@ -711,6 +712,35 @@ local function serve_receive_loop(runtime, logger)
     end
 end
 
+---@param runtime table
+---@param updated_config table
+---@param logger table
+---@return SgcResult
+local function apply_runtime_config(runtime, updated_config, logger)
+    local cleared_previous_outputs = alarm_output.clear(runtime.alarm.outputs, runtime.output_state)
+    if not cleared_previous_outputs.ok then
+        return cleared_previous_outputs
+    end
+
+    local cleared_previous_speaker = alarm_speaker.clear_runtime(runtime.speaker)
+    if not cleared_previous_speaker.ok then
+        return cleared_previous_speaker
+    end
+
+    local resolved_alarm = resolve_alarm_config(updated_config)
+    runtime.config = updated_config
+    runtime.alarm = resolved_alarm
+    runtime.speaker = alarm_speaker.new_runtime(resolved_alarm.speaker)
+    runtime.output_state = alarm_output.new_state()
+
+    local cleared_updated_outputs = alarm_output.clear(runtime.alarm.outputs, runtime.output_state)
+    if not cleared_updated_outputs.ok then
+        return cleared_updated_outputs
+    end
+
+    return evaluate_runtime(runtime, logger)
+end
+
 ---@param config table
 ---@param logger table?
 ---@return SgcResult
@@ -767,6 +797,22 @@ function alarm_controller.start(config, logger)
     end
 
     if os ~= nil and type(os.pullEvent) == "function" and type(os.startTimer) == "function" then
+        if parallel ~= nil and type(parallel.waitForAny) == "function" and type(read) == "function" then
+            local exited = nil
+            parallel.waitForAny(
+                function()
+                    exited = serve_event_loop(runtime, active_logger)
+                end,
+                function()
+                    alarm_console.run(config, runtime, active_logger, function(updated_config)
+                        return apply_runtime_config(runtime, updated_config, active_logger)
+                    end)
+                end
+            )
+
+            return exited or result.err("alarm_controller_stopped")
+        end
+
         return serve_event_loop(runtime, active_logger)
     end
 

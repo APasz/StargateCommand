@@ -25,6 +25,7 @@ local controller = {}
 local SITE_CONTROLLER_MONITOR_SCALE = 0.5
 local GATE_CONTACT_FRESH_MS = 5000
 local SITE_STATE_POLL_INTERVAL_SECONDS = 0.25
+local ADMIN_INPUT_POLL_INTERVAL_SECONDS = 0.05
 local SITE_STATUS_HEARTBEAT_INTERVAL_MS = 2000
 local HOST_REBOOT_ACK_TIMEOUT_SECONDS = 2
 local ADMIN_RESTART_INPUT_SIDE = "back"
@@ -440,6 +441,25 @@ local function handle_local_admin_inputs(config, runtime, logger)
     end
 
     return result.ok(true)
+end
+
+---@param config table
+---@param runtime table
+---@param logger table?
+---@return SgcResult
+local function poll_local_admin_inputs(config, runtime, logger)
+    local active_logger = normalize_logger(logger)
+    local admin_inputs = handle_local_admin_inputs(config, runtime, active_logger)
+    if not admin_inputs.ok then
+        record_internal_error(runtime, "handle_local_admin_inputs", admin_inputs)
+        active_logger:warn("site controller admin input handling failed", {
+            error = admin_inputs.error,
+            details = admin_inputs.details,
+        })
+        return result.ok(false)
+    end
+
+    return admin_inputs
 end
 
 ---@param config table
@@ -1114,6 +1134,10 @@ wait_for_gate_result = function(config, runtime, expected_reply_to, timeout_seco
     local waited = command_network.wait_for_result(config, expected_reply_to, timeout_seconds, {
         logger = active_logger,
         inbox = runtime.inbox,
+        before_receive = function()
+            return poll_local_admin_inputs(config, runtime, active_logger)
+        end,
+        poll_interval_seconds = ADMIN_INPUT_POLL_INTERVAL_SECONDS,
         on_unmatched = function(incoming)
             local handled = dispatch_incoming(config, runtime, incoming, active_logger)
             if not handled.ok then
@@ -1185,8 +1209,22 @@ function controller.serve(config, logger)
         })
     end
 
+    local admin_input_receive_options = {
+        before_receive = function()
+            return poll_local_admin_inputs(config, runtime, active_logger)
+        end,
+        poll_interval_seconds = ADMIN_INPUT_POLL_INTERVAL_SECONDS,
+    }
+
     while true do
-        local received = net_inbox.receive_next(config, runtime.inbox, SITE_STATE_POLL_INTERVAL_SECONDS, nil, active_logger)
+        local received = net_inbox.receive_next(
+            config,
+            runtime.inbox,
+            SITE_STATE_POLL_INTERVAL_SECONDS,
+            nil,
+            active_logger,
+            admin_input_receive_options
+        )
         if not received.ok then
             if received.error == "receive_timeout" then
                 local heartbeat = publish_site_status(config, runtime, false)
@@ -1219,15 +1257,6 @@ function controller.serve(config, logger)
                     role = received.value.envelope.role,
                 })
             end
-        end
-
-        local admin_inputs = handle_local_admin_inputs(config, runtime, active_logger)
-        if not admin_inputs.ok then
-            record_internal_error(runtime, "handle_local_admin_inputs", admin_inputs)
-            active_logger:warn("site controller admin input handling failed", {
-                error = admin_inputs.error,
-                details = admin_inputs.details,
-            })
         end
     end
 end

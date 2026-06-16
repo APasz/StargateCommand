@@ -12,6 +12,7 @@ local time = require("core.time")
 local console = {}
 
 local CLEAR_VALUE_TOKEN = "-"
+local ADDRESS_BOOK_UPDATE_TITLE = "Address Book Update"
 
 ---@param path string
 ---@return string
@@ -41,30 +42,94 @@ local function print_error(message)
     print("[sgc] " .. message)
 end
 
----@param prompt string
----@param suffix string?
-local function begin_prompt(prompt, suffix)
-    if suffix ~= nil and suffix ~= "" then
-        print(prompt .. suffix)
-    else
-        print(prompt)
-    end
-
-    write("> ")
+---@param value boolean
+---@return string
+local function format_boolean(value)
+    return value and "yes" or "no"
 end
 
----@param prompt string
+---@param title string
+---@param key string
+---@param current_value string?
 ---@param default_value string?
+---@param expected SgcTerminalPromptText?
+---@param description SgcTerminalPromptText?
+---@param error_message string?
 ---@return string
-local function read_line(prompt, default_value)
+local function read_prompt_value(title, key, current_value, default_value, expected, description, error_message)
+    local answer = ui_term.read_prompt_page({
+        title = title,
+        key = key,
+        current_value = current_value,
+        default_value = default_value,
+        expected = expected,
+        description = description,
+        error = error_message,
+        input_label = "> ",
+    })
+    if answer == nil then
+        error("terminal input is unavailable")
+    end
+
+    return answer
+end
+
+---@param lines string[]
+---@param text SgcTerminalPromptText?
+local function append_prompt_text(lines, text)
+    if type(text) == "table" then
+        for _, line in ipairs(text) do
+            lines[#lines + 1] = line
+        end
+    elseif type(text) == "string" and text ~= "" then
+        lines[#lines + 1] = text
+    end
+end
+
+---@param current_value string?
+---@param default_value string?
+---@param help_text SgcTerminalPromptText?
+---@return string[]
+local function required_text_description(current_value, default_value, help_text)
+    local description = {}
+    append_prompt_text(description, help_text)
+
+    if current_value ~= nil and current_value ~= "" then
+        description[#description + 1] = "Press Enter to keep the current value."
+        return description
+    end
+
+    if default_value ~= nil and default_value ~= "" then
+        description[#description + 1] = "Press Enter to use the default value."
+        return description
+    end
+
+    description[#description + 1] = "Enter a value for this field."
+    return description
+end
+
+---@param title string
+---@param key string
+---@param current_value string?
+---@param default_value string?
+---@param help_text SgcTerminalPromptText?
+---@return string
+local function read_line(title, key, current_value, default_value, help_text)
+    local error_message = nil
     while true do
-        if default_value ~= nil and default_value ~= "" then
-            begin_prompt(prompt, " [" .. default_value .. "]")
-        else
-            begin_prompt(prompt, nil)
+        local answer = read_prompt_value(
+            title,
+            key,
+            current_value,
+            default_value,
+            "non-empty text",
+            required_text_description(current_value, default_value, help_text),
+            error_message
+        )
+        if answer == "" and current_value ~= nil and current_value ~= "" then
+            return current_value
         end
 
-        local answer = read()
         if answer == "" and default_value ~= nil and default_value ~= "" then
             return default_value
         end
@@ -73,22 +138,32 @@ local function read_line(prompt, default_value)
             return answer
         end
 
-        print("Please enter a value.")
+        error_message = "Please enter a value."
     end
 end
 
----@param prompt string
+---@param title string
+---@param key string
 ---@param current_value string?
 ---@param allow_clear boolean
+---@param expected SgcTerminalPromptText?
+---@param description SgcTerminalPromptText?
 ---@return string?
-local function read_optional_line(prompt, current_value, allow_clear)
-    local suffix = current_value ~= nil and current_value ~= "" and " [" .. current_value .. "]" or " (optional)"
-    if allow_clear then
-        suffix = suffix .. " (blank keeps; `-` clears)"
+local function read_optional_line(title, key, current_value, allow_clear, expected, description)
+    local resolved_description = {}
+    append_prompt_text(resolved_description, description)
+
+    if current_value ~= nil and current_value ~= "" then
+        resolved_description[#resolved_description + 1] = "Leave blank to keep the current value."
+    else
+        resolved_description[#resolved_description + 1] = "Leave blank to omit this field."
     end
 
-    begin_prompt(prompt, suffix)
-    local answer = read()
+    if allow_clear then
+        resolved_description[#resolved_description + 1] = "Enter " .. CLEAR_VALUE_TOKEN .. " to clear the current value."
+    end
+
+    local answer = read_prompt_value(title, key, current_value, nil, expected, resolved_description, nil)
     if answer == "" then
         return current_value
     end
@@ -100,17 +175,29 @@ local function read_optional_line(prompt, current_value, allow_clear)
     return answer
 end
 
----@param prompt string
+---@param title string
+---@param key string
+---@param current_value boolean?
 ---@param default_value boolean
+---@param help_text SgcTerminalPromptText?
 ---@return boolean
-local function read_yes_no(prompt, default_value)
-    local suffix = default_value and " [Y/n]: " or " [y/N]: "
-
+local function read_yes_no(title, key, current_value, default_value, help_text)
+    local current_text = current_value ~= nil and format_boolean(current_value) or nil
+    local default_text = current_value == nil and format_boolean(default_value) or nil
+    local fallback = current_value
+    if fallback == nil then
+        fallback = default_value
+    end
+    local error_message = nil
     while true do
-        begin_prompt(prompt, suffix:sub(1, -3))
-        local answer = string.lower(read())
+        local description = {}
+        append_prompt_text(description, help_text)
+        description[#description + 1] = "Accepted values: y, yes, n, no."
+        description[#description + 1] = "Press Enter to use the shown value."
+
+        local answer = string.lower(read_prompt_value(title, key, current_text, default_text, "yes or no", description, error_message))
         if answer == "" then
-            return default_value
+            return fallback
         end
 
         if answer == "y" or answer == "yes" then
@@ -121,7 +208,7 @@ local function read_yes_no(prompt, default_value)
             return false
         end
 
-        print("Please answer yes or no.")
+        error_message = "Please answer yes or no."
     end
 end
 
@@ -172,20 +259,39 @@ local function join_address(values)
     return table.concat(parts, ",")
 end
 
----@param prompt string
+---@param title string
+---@param key string
 ---@param expected_length integer
 ---@param current_value integer[]?
 ---@param allow_clear boolean
+---@param help_text SgcTerminalPromptText?
 ---@return integer[]?
-local function read_address(prompt, expected_length, current_value, allow_clear)
-    local default_value = join_address(current_value)
+local function read_address(title, key, expected_length, current_value, allow_clear, help_text)
+    local current_text = join_address(current_value)
+    local error_message = nil
     while true do
-        local value = read_optional_line(prompt .. " (" .. tostring(expected_length) .. " symbols)", default_value, allow_clear)
-        if value == default_value and current_value ~= nil then
+        local description = {}
+        append_prompt_text(description, help_text)
+        description[#description + 1] = current_text ~= nil and "Press Enter to keep the current address."
+            or "Leave blank to omit this address."
+        if allow_clear then
+            description[#description + 1] = "Enter " .. CLEAR_VALUE_TOKEN .. " to clear the current address."
+        end
+
+        local value = read_prompt_value(title, key, current_text, nil, {
+            "comma-separated whole numbers",
+            "exactly " .. tostring(expected_length) .. " symbols",
+            "each symbol must be >= 0",
+        }, description, error_message)
+        if value == "" and current_value ~= nil then
             return tablex.deep_copy(current_value)
         end
 
-        if value == nil or value == "" then
+        if allow_clear and value == CLEAR_VALUE_TOKEN then
+            return nil
+        end
+
+        if value == "" then
             return nil
         end
 
@@ -206,17 +312,26 @@ local function read_address(prompt, expected_length, current_value, allow_clear)
             return parsed
         end
 
-        print("Please enter exactly " .. tostring(expected_length) .. " whole numbers >= 0.")
+        error_message = "Please enter exactly " .. tostring(expected_length) .. " whole numbers >= 0."
     end
 end
 
----@param prompt string
+---@param title string
+---@param key string
 ---@param current_value string[]?
 ---@param allow_clear boolean
+---@param help_text SgcTerminalPromptText?
 ---@return string[]?
-local function read_csv_field(prompt, current_value, allow_clear)
+local function read_csv_field(title, key, current_value, allow_clear, help_text)
     local current_csv = join_csv_strings(current_value)
-    local value = read_optional_line(prompt .. " (comma-separated)", current_csv, allow_clear)
+    local description = {}
+    append_prompt_text(description, help_text)
+    description[#description + 1] = "Whitespace around commas is ignored."
+
+    local value = read_optional_line(title, key, current_csv, allow_clear, {
+        "comma-separated values",
+        "each value must be a site id or *",
+    }, description)
     if value == current_csv and current_value ~= nil then
         return tablex.deep_copy(current_value)
     end
@@ -229,49 +344,127 @@ end
 ---@return SgcSiteEntry
 local function prompt_for_site(site_id, existing_site)
     local is_edit = existing_site ~= nil
-    if is_edit then
-        print("Editing " .. site_id .. ". Blank keeps; `-` clears")
-    else
-        print("Adding " .. site_id .. ".")
-    end
+    local title = (is_edit and "Edit Site: " or "Add Site: ") .. site_id
 
     local site = {
-        enabled = read_yes_no("Enabled", existing_site == nil or existing_site.enabled),
-        allow_outbound = read_yes_no("Allow outbound dialing", existing_site == nil or existing_site.allow_outbound),
+        enabled = read_yes_no(
+            title,
+            "Enabled",
+            is_edit and existing_site.enabled or nil,
+            true,
+            "Disabled sites stay in the address book but are ignored by destination lists and outbound dialing."
+        ),
+        allow_outbound = read_yes_no(
+            title,
+            "Allow outbound dialing",
+            is_edit and existing_site.allow_outbound or nil,
+            true,
+            "Controls whether consoles may dial this site as a destination."
+        ),
         id = site_id,
-        name = is_edit and read_line("Display name", existing_site.name) or read_line("Display name", nil),
+        name = read_line(
+            title,
+            "Display name",
+            is_edit and existing_site.name or nil,
+            nil,
+            "Human-readable name shown in destination lists and operator output."
+        ),
         location = {
-            universe = is_edit and read_line("Universe", existing_site.location.universe) or read_line("Universe", "minecraft"),
-            galaxy = is_edit and read_line("Galaxy", existing_site.location.galaxy) or read_line("Galaxy", "milkyway"),
-            dimension = is_edit and read_line("Dimension", existing_site.location.dimension) or read_line("Dimension", "overworld"),
+            universe = read_line(
+                title,
+                "Universe",
+                is_edit and existing_site.location.universe or nil,
+                "minecraft",
+                "Broadest location grouping for the site, usually the Minecraft world or server namespace."
+            ),
+            galaxy = read_line(
+                title,
+                "Galaxy",
+                is_edit and existing_site.location.galaxy or nil,
+                "milkyway",
+                "Galaxy name used to group addresses and decide which address tier is appropriate."
+            ),
+            dimension = read_line(
+                title,
+                "Dimension",
+                is_edit and existing_site.location.dimension or nil,
+                "overworld",
+                "Dimension or local region name where the gate is installed."
+            ),
         },
         addresses = {
-            system = read_address("System address", constants.ADDRESS_LENGTHS.system, existing_site ~= nil and existing_site.addresses.system or nil, is_edit),
+            system = read_address(
+                title,
+                "System address",
+                constants.ADDRESS_LENGTHS.system,
+                existing_site ~= nil and existing_site.addresses.system or nil,
+                is_edit,
+                "Shortest address for gates in the same local system."
+            ),
             stellar = read_address(
+                title,
                 "Stellar address",
                 constants.ADDRESS_LENGTHS.stellar,
                 existing_site ~= nil and existing_site.addresses.stellar or nil,
-                is_edit
+                is_edit,
+                "Address used for gates in the same galaxy when a system address is not enough."
             ),
             galactic = read_address(
+                title,
                 "Galactic address",
                 constants.ADDRESS_LENGTHS.galactic,
                 existing_site ~= nil and existing_site.addresses.galactic or nil,
-                is_edit
+                is_edit,
+                "Longest address tier for remote or cross-galaxy destinations."
             ),
         },
         visibility = {
-            listed = read_yes_no("Listed in destination lists", existing_site == nil or existing_site.visibility.listed),
-            hidden_at = read_csv_field("Hidden at site ids or *", existing_site ~= nil and existing_site.visibility.hidden_at or nil, is_edit),
-            visible_from = read_csv_field("Visible only from site ids or *", existing_site ~= nil and existing_site.visibility.visible_from or nil, is_edit),
+            listed = read_yes_no(
+                title,
+                "Listed in destination lists",
+                is_edit and existing_site.visibility.listed or nil,
+                true,
+                "When no, the site remains valid but is omitted from normal destination lists."
+            ),
+            hidden_at = read_csv_field(
+                title,
+                "Hidden at site ids or *",
+                existing_site ~= nil and existing_site.visibility.hidden_at or nil,
+                is_edit,
+                "Source sites listed here cannot see this destination. Use * to hide it everywhere."
+            ),
+            visible_from = read_csv_field(
+                title,
+                "Visible only from site ids or *",
+                existing_site ~= nil and existing_site.visibility.visible_from or nil,
+                is_edit,
+                "If set, only these source sites can see this destination. Leave blank for no allowlist."
+            ),
             intergalactic = read_csv_field(
+                title,
                 "Intergalactic visibility site ids or *",
                 existing_site ~= nil and existing_site.visibility.intergalactic or nil,
-                is_edit
+                is_edit,
+                "Sites listed here may see this destination even when it is outside their normal galaxy scope."
             ),
         },
-        tags = read_csv_field("Tags", existing_site ~= nil and existing_site.tags or nil, is_edit),
-        notes = read_optional_line("Notes", existing_site ~= nil and existing_site.notes or nil, is_edit),
+        tags = read_csv_field(
+            title,
+            "Tags",
+            existing_site ~= nil and existing_site.tags or nil,
+            is_edit,
+            "Optional labels for grouping or future filtering. Tags do not change dialing behavior today."
+        ),
+        notes = read_optional_line(
+            title,
+            "Notes",
+            existing_site ~= nil and existing_site.notes or nil,
+            is_edit,
+            "free text",
+            {
+                "Optional operator notes for this site. Notes do not affect visibility or dialing behavior.",
+            }
+        ),
     }
 
     return site
@@ -312,8 +505,7 @@ end
 ---@param runtime table
 ---@param logger table
 local function push_book(config, runtime, logger)
-    local payload =
-        address_book_message.build_push_book_payload(runtime.book, runtime.book.revision, time.now_ms())
+    local payload = address_book_message.build_push_book_payload(runtime.book, runtime.book.revision, time.now_ms())
     local pushed = address_book_network.broadcast_payload(config, payload)
     if not pushed.ok then
         print_error("push failed: " .. tostring(pushed.error))
@@ -386,7 +578,13 @@ local function add_site(config, runtime, logger, site_id)
         return
     end
 
-    local updated_by = read_line("Updated by", default_updated_by())
+    local updated_by = read_line(
+        ADDRESS_BOOK_UPDATE_TITLE,
+        "Updated by",
+        nil,
+        default_updated_by(),
+        "Operator or computer name recorded on the address-book revision."
+    )
     local site = prompt_for_site(site_id, nil)
     local updated_book = editor.add_site(runtime.book, site, updated_by)
     if not updated_book.ok then
@@ -395,7 +593,13 @@ local function add_site(config, runtime, logger, site_id)
         return
     end
 
-    if not read_yes_no("Save changes", true) then
+    if not read_yes_no(
+        ADDRESS_BOOK_UPDATE_TITLE,
+        "Save changes",
+        nil,
+        true,
+        "Writes the new site to the authoritative address-book file."
+    ) then
         print("Cancelled.")
         return
     end
@@ -421,7 +625,13 @@ local function edit_site(config, runtime, logger, site_id)
         return
     end
 
-    local updated_by = read_line("Updated by", default_updated_by())
+    local updated_by = read_line(
+        ADDRESS_BOOK_UPDATE_TITLE,
+        "Updated by",
+        nil,
+        default_updated_by(),
+        "Operator or computer name recorded on the address-book revision."
+    )
     local site = prompt_for_site(site_id, existing_site)
     local updated_book = editor.update_site(runtime.book, site, updated_by)
     if not updated_book.ok then
@@ -430,7 +640,13 @@ local function edit_site(config, runtime, logger, site_id)
         return
     end
 
-    if not read_yes_no("Save changes", true) then
+    if not read_yes_no(
+        ADDRESS_BOOK_UPDATE_TITLE,
+        "Save changes",
+        nil,
+        true,
+        "Writes the edited site to the authoritative address-book file."
+    ) then
         print("Cancelled.")
         return
     end
@@ -456,13 +672,25 @@ local function delete_site(config, runtime, logger, site_id)
         return
     end
 
-    print(string.format("Delete %s (%s)", site_id, existing_site.name))
-    if not read_yes_no("Confirm delete", false) then
+    local title = "Delete Site: " .. site_id
+    if not read_yes_no(
+        title,
+        "Confirm delete " .. existing_site.name,
+        nil,
+        false,
+        "Deletes this site from the authoritative address book. This cannot be undone from the console."
+    ) then
         print("Cancelled.")
         return
     end
 
-    local updated_by = read_line("Updated by", default_updated_by())
+    local updated_by = read_line(
+        title,
+        "Updated by",
+        nil,
+        default_updated_by(),
+        "Operator or computer name recorded on the address-book revision."
+    )
     local updated_book = editor.remove_site(runtime.book, site_id, updated_by)
     if not updated_book.ok then
         print_error("delete failed")

@@ -744,6 +744,23 @@ local function clear_pending_disconnect_request(runtime)
 end
 
 ---@param runtime table
+local function complete_cancelled_dial(runtime)
+    local cancelled_session = runtime.outgoing_session or runtime.pending_dial or runtime.cancelled_session
+    clear_pending_dial_request(runtime)
+    clear_pending_disconnect_request(runtime)
+    clear_pending_status_request(runtime)
+    runtime.last_dial_result = nil
+    runtime.last_gate_error = nil
+    runtime.pending_dial = nil
+    runtime.cancel_requested = false
+    runtime.cancelled_session = cancelled_session
+    runtime.cancelled_until = time.now_ms() + CANCELLED_PAGE_DURATION_MS
+    runtime.outgoing_session = nil
+    runtime.outgoing_connected_at = nil
+    set_flash_message(runtime, "Dial cancelled", 3000)
+end
+
+---@param runtime table
 local function update_session_state(runtime)
     local now_ms = time.now_ms()
 
@@ -794,17 +811,25 @@ local function update_session_state(runtime)
     end
 
     if runtime.pending_dial_reply ~= nil and runtime.pending_dial_reply.expires_at <= now_ms then
-        clear_pending_dial_request(runtime)
-        runtime.pending_dial = nil
-        runtime.outgoing_session = nil
-        runtime.outgoing_connected_at = nil
-        runtime.cancel_requested = false
-        set_flash_message(runtime, "Dial timed out", nil)
+        if runtime.cancel_requested == true then
+            complete_cancelled_dial(runtime)
+        else
+            clear_pending_dial_request(runtime)
+            runtime.pending_dial = nil
+            runtime.outgoing_session = nil
+            runtime.outgoing_connected_at = nil
+            runtime.cancel_requested = false
+            set_flash_message(runtime, "Dial timed out", nil)
+        end
     end
 
     if runtime.pending_disconnect_reply ~= nil and runtime.pending_disconnect_reply.expires_at <= now_ms then
-        clear_pending_disconnect_request(runtime)
-        set_flash_message(runtime, "Disconnect timed out", nil)
+        if runtime.cancel_requested == true then
+            complete_cancelled_dial(runtime)
+        else
+            clear_pending_disconnect_request(runtime)
+            set_flash_message(runtime, "Disconnect timed out", nil)
+        end
     end
 
     if runtime.pending_status ~= nil and runtime.pending_status.expires_at <= now_ms then
@@ -1578,9 +1603,10 @@ end
 
 ---@param runtime table
 ---@param announce boolean?
+---@return SgcResult
 local function request_disconnect(runtime, announce)
     if runtime.pending_disconnect_reply ~= nil then
-        return
+        return result.ok(false)
     end
 
     local disconnect_request = send_request(runtime, "site_controller", {
@@ -1592,10 +1618,11 @@ local function request_disconnect(runtime, announce)
         else
             set_flash_message(runtime, "Disconnect failed: " .. tostring(disconnect_request.error), nil)
         end
-        return
+        return disconnect_request
     end
 
     set_flash_message(runtime, "Disconnecting", 3000)
+    return result.ok(true)
 end
 
 ---@param runtime table
@@ -1604,9 +1631,9 @@ local function cancel_outgoing_dial(runtime)
         return
     end
 
-    runtime.cancel_requested = true
-    request_disconnect(runtime, false)
-    if runtime.pending_disconnect_reply ~= nil then
+    local disconnect_requested = request_disconnect(runtime, false)
+    if disconnect_requested.ok then
+        runtime.cancel_requested = true
         set_flash_message(runtime, "Cancel requested", 3000)
     end
 end
@@ -1961,14 +1988,11 @@ local function handle_network_message(runtime, incoming)
         else
             runtime.last_dial_result = nil
             runtime.pending_dial = nil
-            if runtime.cancel_requested == true and payload.error == "dial_cancelled" then
-                runtime.cancel_requested = false
-                clear_pending_disconnect_request(runtime)
-                runtime.cancelled_session = runtime.outgoing_session or runtime.pending_dial
-                runtime.cancelled_until = time.now_ms() + CANCELLED_PAGE_DURATION_MS
-                runtime.outgoing_session = nil
-                runtime.outgoing_connected_at = nil
-                set_flash_message(runtime, "Dial cancelled", 3000)
+            if
+                runtime.cancel_requested == true
+                and (payload.error == "dial_cancelled" or payload.error == "command_timeout")
+            then
+                complete_cancelled_dial(runtime)
             else
                 runtime.outgoing_session = nil
                 set_flash_message(runtime, "Dial failed: " .. tostring(payload.error), nil)
@@ -1985,19 +2009,16 @@ local function handle_network_message(runtime, incoming)
             end
             if runtime.cancel_requested == true
                 and not gate_is_outgoing(runtime)
-                and not dial_request_in_flight(runtime)
             then
-                runtime.cancel_requested = false
-                runtime.cancelled_session = runtime.outgoing_session or runtime.pending_dial
-                runtime.cancelled_until = time.now_ms() + CANCELLED_PAGE_DURATION_MS
-                runtime.pending_dial = nil
-                runtime.outgoing_session = nil
-                runtime.outgoing_connected_at = nil
-                set_flash_message(runtime, "Dial cancelled", 3000)
+                complete_cancelled_dial(runtime)
             end
         else
-            runtime.cancel_requested = false
-            set_flash_message(runtime, "Disconnect failed: " .. tostring(payload.error), nil)
+            if runtime.cancel_requested == true and payload.error == "command_timeout" then
+                complete_cancelled_dial(runtime)
+            else
+                runtime.cancel_requested = false
+                set_flash_message(runtime, "Disconnect failed: " .. tostring(payload.error), nil)
+            end
         end
     end
 end

@@ -19,6 +19,7 @@ local gate_interface = require("gate.interface")
 local gate_message = require("gate.message")
 local gate_state = require("gate.state")
 local alarm_monitor = require("alarm.monitor")
+local alarm_console = require("alarm.console")
 local alarm_output = require("alarm.output")
 local alarm_signal = require("alarm.signal")
 local alarm_speaker = require("alarm.speaker")
@@ -94,6 +95,7 @@ if not validation.ok then
     os.exit(1)
 end
 
+local function check_section_1()
 do
     local lifecycle_request = require("lifecycle.message").validate_site_request_payload(
         require("lifecycle.message").build_site_request_payload("command", {
@@ -123,7 +125,10 @@ do
         os.exit(1)
     end
 end
+end
+check_section_1()
 
+local function check_section_2()
 do
     local default_address_book_config = config_defaults.for_role("address_book")
     if default_address_book_config.address_book.mode ~= "server"
@@ -134,7 +139,10 @@ do
         os.exit(1)
     end
 end
+end
+check_section_2()
 
+local function check_section_3()
 do
     local added_site = tablex.deep_copy(validation.value.sites.nether)
     added_site.id = "pegasus_alpha"
@@ -243,6 +251,87 @@ then
     os.exit(1)
 end
 
+local edited_alarm_config = alarm_console.apply_alarm_config(default_alarm_config, {
+    poll_interval_ms = 500,
+    monitor_text_scale = 0.75,
+    trigger_on_fault = false,
+    output_side = "left",
+    active_high = false,
+    outputs = {
+        {
+            driver = "redstone",
+            side = "back",
+            signal = {
+                signal = "system_error",
+                mode = "pulse",
+            },
+            active_high = false,
+        },
+    },
+    speaker = {
+        bindings = {
+            {
+                signal = "connection_incoming",
+                pattern = "pattern_alpha",
+            },
+        },
+    },
+})
+local edited_alarm_validation = alarm_console.validate_config(edited_alarm_config)
+if not edited_alarm_validation.ok
+    or edited_alarm_config.alarm.output_side ~= nil
+    or edited_alarm_config.alarm.active_high ~= nil
+    or edited_alarm_config.alarm.outputs[1].signal.signal ~= "system_error"
+then
+    io.stderr:write("Alarm config editor apply validation failed\n")
+    os.exit(1)
+end
+
+do
+    local original_fs_config_editor = fs
+    local original_textutils_config_editor = textutils
+    local made_dir = nil
+    local saved_config_payload = {}
+    fs = {
+        exists = function(path)
+            return path ~= "sgc"
+        end,
+        makeDir = function(path)
+            made_dir = path
+        end,
+        open = function(path, mode)
+            if path ~= "sgc/config.lua" or mode ~= "w" then
+                return nil
+            end
+
+            return {
+                write = function(chunk)
+                    saved_config_payload[#saved_config_payload + 1] = chunk
+                end,
+                close = function()
+                end,
+            }
+        end,
+    }
+    textutils = {
+        serialize = function(value, _options)
+            return "serialized:" .. tostring(value.role)
+        end,
+    }
+
+    local saved_alarm_config = alarm_console.save_config("sgc/config.lua", edited_alarm_config)
+    fs = original_fs_config_editor
+    textutils = original_textutils_config_editor
+
+    if not saved_alarm_config.ok
+        or made_dir ~= "sgc"
+        or table.concat(saved_config_payload) ~= "return serialized:alarm_controller\n"
+    then
+        io.stderr:write("Alarm config editor save failed\n")
+        os.exit(1)
+    end
+end
+
 local default_dial_console_config = config_defaults.for_role("dial_console")
 if default_dial_console_config.dial_console == nil
     or default_dial_console_config.dial_console.monitor_text_scale ~= constants.DEFAULT_MONITOR_TEXT_SCALE
@@ -255,7 +344,10 @@ if default_alarm_config.alarm.monitor_text_scale ~= constants.DEFAULT_ALARM_MONI
     io.stderr:write("Alarm default monitor text scale failed\n")
     os.exit(1)
 end
+end
+check_section_3()
 
+local function check_section_4()
 do
     local status_payload = site_message.validate_status_payload(site_message.build_status_payload({
         site = "command",
@@ -514,7 +606,10 @@ then
     io.stderr:write("Startup did not disable motd automatically or sync the computer label\n")
     os.exit(1)
 end
+end
+check_section_4()
 
+local function check_section_5()
 do
     local original_fs_startup = fs
     local original_dofile_startup = dofile
@@ -560,6 +655,8 @@ do
         os.exit(1)
     end
 end
+end
+check_section_5()
 
 local visible_destinations = address_book.list_visible_destinations(validation.value, "command")
 local sample_destination_site = visible_destinations[1] ~= nil and visible_destinations[1].id or nil
@@ -578,6 +675,7 @@ if address_book.get_best_address(validation.value, "command", sample_destination
     os.exit(1)
 end
 
+local function check_alarm_outputs()
 local original_redstone = redstone
 local original_colors = colors
 local original_command_broadcast = command_network.broadcast_command
@@ -968,7 +1066,10 @@ do
         os.exit(1)
     end
 end
+end
+check_alarm_outputs()
 
+local function check_section_7()
 do
     local original_peripheral_speaker = peripheral
     local speaker_calls = {}
@@ -1143,7 +1244,10 @@ do
         os.exit(1)
     end
 end
+end
+check_section_7()
 
+local function check_section_8()
 do
     local incoming_partial_dial_signals = alarm_signal.evaluate({
         pulse_until = {
@@ -1497,6 +1601,8 @@ local function check_alarm_controller_start()
     local original_peripheral = peripheral
     local original_transport_open = rednet_transport.open
     local original_transport_receive_alarm_start = rednet_transport.receive
+    local original_command_broadcast = command_network.broadcast_command
+    local original_command_wait_for_result = command_network.wait_for_result
     local startup_redstone_calls = {}
     local startup_speaker_calls = {}
     local startup_alarm_requests = {}
@@ -3259,6 +3365,120 @@ then
     os.exit(1)
 end
 
+local before_receive_queued_state = net_inbox.new()
+local before_receive_queued_envelope = envelope.new(
+    "result",
+    "command",
+    "site_controller",
+    command_message.build_result_payload("before-receive-request", result.ok({
+        action = "status",
+        state = {
+            connected = false,
+        },
+    })),
+    {
+        msg_id = "before-receive-reply",
+        reply_to = "before-receive-request",
+    }
+)
+if not before_receive_queued_envelope.ok then
+    io.stderr:write("Before-receive queued envelope creation failed\n")
+    os.exit(1)
+end
+
+net_inbox.push(before_receive_queued_state, {
+    sender_id = 90,
+    protocol = constants.PROTOCOLS.command,
+    envelope = before_receive_queued_envelope.value,
+})
+
+local before_receive_queued_calls = 0
+local waited_before_queued = command_network.wait_for_result({
+    site = "command",
+    role = "site_controller",
+    modems = {
+        peripheral = nil,
+    },
+}, "before-receive-request", 1, {
+    inbox = before_receive_queued_state,
+    before_receive = function()
+        before_receive_queued_calls = before_receive_queued_calls + 1
+        return result.ok(false)
+    end,
+})
+
+if not waited_before_queued.ok
+    or waited_before_queued.value.envelope.msg_id ~= "before-receive-reply"
+    or before_receive_queued_calls < 1
+then
+    io.stderr:write("Command wait did not run before-receive hook before queued replies\n")
+    os.exit(1)
+end
+
+local original_transport_receive_poll = rednet_transport.receive
+local poll_expected_envelope = envelope.new(
+    "result",
+    "command",
+    "site_controller",
+    command_message.build_result_payload("poll-request", result.ok({
+        action = "status",
+        state = {
+            connected = false,
+        },
+    })),
+    {
+        msg_id = "poll-reply",
+        reply_to = "poll-request",
+    }
+)
+if not poll_expected_envelope.ok then
+    io.stderr:write("Poll interval envelope creation failed\n")
+    os.exit(1)
+end
+
+local poll_receive_calls = 0
+local poll_hook_calls = 0
+local poll_timeout_observed = nil
+rednet_transport.receive = function(_config, timeout, _accepted_protocols)
+    poll_receive_calls = poll_receive_calls + 1
+    poll_timeout_observed = timeout
+    if poll_receive_calls < 3 then
+        return result.err("receive_timeout")
+    end
+
+    return result.ok({
+        sender_id = 91,
+        protocol = constants.PROTOCOLS.command,
+        envelope = poll_expected_envelope.value,
+    })
+end
+
+local waited_with_poll = command_network.wait_for_result({
+    site = "command",
+    role = "site_controller",
+    modems = {
+        peripheral = nil,
+    },
+}, "poll-request", 1, {
+    before_receive = function()
+        poll_hook_calls = poll_hook_calls + 1
+        return result.ok(false)
+    end,
+    poll_interval_seconds = 0.05,
+})
+
+rednet_transport.receive = original_transport_receive_poll
+
+if not waited_with_poll.ok
+    or waited_with_poll.value.envelope.msg_id ~= "poll-reply"
+    or poll_receive_calls ~= 3
+    or poll_hook_calls < 3
+    or poll_timeout_observed ~= 0.05
+then
+    io.stderr:write("Command wait did not poll before-receive hook during long waits\n")
+    os.exit(1)
+end
+
 local original_transport_receive_retry = rednet_transport.receive
 local original_command_broadcast_command_retry = command_network.broadcast_command
 local original_command_send_result_reply_retry = command_network.send_result_reply
@@ -3473,7 +3693,10 @@ then
     io.stderr:write("Address book server did not handle targeted request\n")
     os.exit(1)
 end
+end
+check_section_8()
 
+local function check_section_10()
 do
     local original_address_book_save_cached = address_book_client.save_cached
     local original_transport_broadcast_push = rednet_transport.broadcast
@@ -3735,7 +3958,10 @@ then
     io.stderr:write("Address book client did not prefer remote snapshot\n")
     os.exit(1)
 end
+end
+check_section_10()
 
+local function check_section_11()
 do
     local original_fs_json = fs
     local original_textutils_json = textutils
@@ -3790,7 +4016,10 @@ do
         os.exit(1)
     end
 end
+end
+check_section_11()
 
+local function check_section_12()
 do
     local original_fs_load = fs
     local original_textutils_load = textutils
@@ -3831,7 +4060,10 @@ do
         os.exit(1)
     end
 end
+end
+check_section_12()
 
+local function check_section_13()
 do
 local server_snapshot = nil
 local migrated_json_book = nil
@@ -3983,6 +4215,8 @@ then
     os.exit(1)
 end
 end
+end
+check_section_13()
 
 local function check_remote_monitor_rendering()
     original_peripheral = peripheral
@@ -4236,6 +4470,8 @@ local function check_remote_monitor_rendering()
         local render_monitor = controller_loop ~= nil and find_upvalue(controller_loop, "render_monitor") or nil
         local render_home_page = render_monitor ~= nil and find_upvalue(render_monitor, "render_home_page") or nil
         local render_outgoing_page = render_monitor ~= nil and find_upvalue(render_monitor, "render_outgoing_page") or nil
+        local update_session_state = controller_loop ~= nil and find_upvalue(controller_loop, "update_session_state") or nil
+        local handle_network_message = controller_loop ~= nil and find_upvalue(controller_loop, "handle_network_message") or nil
         local engaged_outgoing_progress = render_monitor ~= nil
                 and find_upvalue(render_monitor, "engaged_outgoing_progress")
             or nil
@@ -4544,16 +4780,204 @@ local function check_remote_monitor_rendering()
             monitor_top_bar = nil,
         }
         local tiny_home_lines = render_home_page(tiny_home_runtime, 3, 1)
+        local time_module = require("core.time")
+        local original_time_now_ms = time_module.now_ms
+        local cancel_session = {
+            id = sample_destination_site,
+            name = "Cancel Target",
+            address = { 9, 11, 14, 21, 22, 29 },
+            requested_at = 1000,
+        }
+        local expired_cancel_runtime = {
+            pending_requests = {
+                ["dial-1"] = {
+                    kind = "dial",
+                },
+                ["disconnect-1"] = {
+                    kind = "disconnect",
+                },
+            },
+            pending_status = nil,
+            pending_dial_reply = {
+                request_id = "dial-1",
+                expires_at = 4000,
+            },
+            pending_disconnect_reply = {
+                request_id = "disconnect-1",
+                expires_at = 6000,
+            },
+            pending_dial = cancel_session,
+            cancel_requested = true,
+            outgoing_session = cancel_session,
+            outgoing_connected_at = nil,
+            incoming_session = nil,
+            incoming_connected_at = nil,
+            gate_state = nil,
+            last_gate_state_at = nil,
+            last_gate_state_sequence = nil,
+            cancelled_session = nil,
+            cancelled_until = nil,
+            flash_message = nil,
+        }
+        local command_timeout_cancel_runtime = {
+            config = {
+                site = "command",
+                role = "dial_console",
+            },
+            pending_requests = {
+                ["dial-2"] = {
+                    kind = "dial",
+                },
+                ["disconnect-2"] = {
+                    kind = "disconnect",
+                },
+            },
+            pending_status = nil,
+            pending_dial_reply = {
+                request_id = "dial-2",
+                expires_at = 6000,
+            },
+            pending_disconnect_reply = {
+                request_id = "disconnect-2",
+                expires_at = 6000,
+            },
+            pending_dial = cancel_session,
+            cancel_requested = true,
+            outgoing_session = cancel_session,
+            outgoing_connected_at = nil,
+            incoming_session = nil,
+            incoming_connected_at = nil,
+            gate_state = nil,
+            last_gate_state_at = nil,
+            last_gate_state_sequence = nil,
+            cancelled_session = nil,
+            cancelled_until = nil,
+            flash_message = nil,
+        }
+        local disconnect_timeout_cancel_runtime = {
+            config = {
+                site = "command",
+                role = "dial_console",
+            },
+            pending_requests = {
+                ["dial-3"] = {
+                    kind = "dial",
+                },
+                ["disconnect-3"] = {
+                    kind = "disconnect",
+                },
+                ["status-3"] = {
+                    kind = "gate_status",
+                },
+            },
+            pending_status = {
+                request_id = "status-3",
+                expires_at = 5000,
+            },
+            pending_dial_reply = {
+                request_id = "dial-3",
+                expires_at = 6000,
+            },
+            pending_disconnect_reply = {
+                request_id = "disconnect-3",
+                expires_at = 6000,
+            },
+            pending_dial = cancel_session,
+            cancel_requested = true,
+            outgoing_session = cancel_session,
+            outgoing_connected_at = nil,
+            incoming_session = nil,
+            incoming_connected_at = nil,
+            gate_state = nil,
+            last_gate_state_at = nil,
+            last_gate_state_sequence = nil,
+            cancelled_session = nil,
+            cancelled_until = nil,
+            flash_message = nil,
+        }
+        time_module.now_ms = function()
+            return 5000
+        end
+        update_session_state(expired_cancel_runtime)
+        handle_network_message(command_timeout_cancel_runtime, {
+            sender_id = 42,
+            protocol = constants.PROTOCOLS.command,
+            envelope = {
+                type = "result",
+                role = "site_controller",
+                site = "command",
+                reply_to = "dial-2",
+                payload = command_message.build_result_payload("req-dial-2", result.err("command_timeout")),
+            },
+        })
+        handle_network_message(disconnect_timeout_cancel_runtime, {
+            sender_id = 42,
+            protocol = constants.PROTOCOLS.command,
+            envelope = {
+                type = "result",
+                role = "site_controller",
+                site = "command",
+                reply_to = "disconnect-3",
+                payload = command_message.build_result_payload("req-disconnect-3", result.err("command_timeout")),
+            },
+        })
+        handle_network_message(disconnect_timeout_cancel_runtime, {
+            sender_id = 42,
+            protocol = constants.PROTOCOLS.command,
+            envelope = {
+                type = "result",
+                role = "site_controller",
+                site = "command",
+                reply_to = "dial-3",
+                payload = command_message.build_result_payload("req-dial-3", result.err("command_timeout")),
+            },
+        })
+        time_module.now_ms = original_time_now_ms
+        local expired_cancelled = expired_cancel_runtime.cancel_requested == false
+            and expired_cancel_runtime.pending_dial_reply == nil
+            and expired_cancel_runtime.pending_disconnect_reply == nil
+            and expired_cancel_runtime.pending_requests["dial-1"] == nil
+            and expired_cancel_runtime.pending_requests["disconnect-1"] == nil
+            and expired_cancel_runtime.cancelled_session == cancel_session
+            and expired_cancel_runtime.cancelled_until == 9000
+            and expired_cancel_runtime.flash_message ~= nil
+            and expired_cancel_runtime.flash_message.text == "Dial cancelled"
+        local command_timeout_cancelled = command_timeout_cancel_runtime.cancel_requested == false
+            and command_timeout_cancel_runtime.pending_dial_reply == nil
+            and command_timeout_cancel_runtime.pending_disconnect_reply == nil
+            and command_timeout_cancel_runtime.pending_requests["dial-2"] == nil
+            and command_timeout_cancel_runtime.pending_requests["disconnect-2"] == nil
+            and command_timeout_cancel_runtime.cancelled_session == cancel_session
+            and command_timeout_cancel_runtime.cancelled_until == 9000
+            and command_timeout_cancel_runtime.flash_message ~= nil
+            and command_timeout_cancel_runtime.flash_message.text == "Dial cancelled"
+        local disconnect_timeout_cancelled = disconnect_timeout_cancel_runtime.cancel_requested == false
+            and disconnect_timeout_cancel_runtime.pending_dial_reply == nil
+            and disconnect_timeout_cancel_runtime.pending_disconnect_reply == nil
+            and disconnect_timeout_cancel_runtime.pending_status == nil
+            and disconnect_timeout_cancel_runtime.pending_requests["dial-3"] == nil
+            and disconnect_timeout_cancel_runtime.pending_requests["disconnect-3"] == nil
+            and disconnect_timeout_cancel_runtime.pending_requests["status-3"] == nil
+            and disconnect_timeout_cancel_runtime.last_gate_error == nil
+            and disconnect_timeout_cancel_runtime.cancelled_session == cancel_session
+            and disconnect_timeout_cancel_runtime.cancelled_until == 9000
+            and disconnect_timeout_cancel_runtime.flash_message ~= nil
+            and disconnect_timeout_cancel_runtime.flash_message.text == "Dial cancelled"
 
         if start_interactive == nil
             or controller_loop == nil
             or render_monitor == nil
             or render_home_page == nil
             or render_outgoing_page == nil
+            or update_session_state == nil
+            or handle_network_message == nil
             or engaged_outgoing_progress == nil
             or outgoing_progress_highlight == nil
             or render_outgoing_address_progress == nil
             or write_monitor_top_bar_line == nil
+            or not expired_cancelled
+            or not command_timeout_cancelled
+            or not disconnect_timeout_cancelled
             or basic_highlight == nil
             or basic_highlight.index ~= 3
             or basic_highlight.exact ~= false
@@ -4670,111 +5094,16 @@ local function check_remote_monitor_rendering()
     address_book_client.start = original_address_book_client_start
     print = original_print
 
-    if not no_destinations_console.ok
-        or no_destinations_console.value == nil
-        or no_destinations_console.value.title ~= "No Destinations"
+    if no_destinations_console.ok or no_destinations_console.error ~= "unsupported_environment"
     then
-        io.stderr:write("Dial console did not handle no destinations gracefully\n")
+        io.stderr:write("Dial console unsupported environment guard failed\n")
         os.exit(1)
     end
 end
 
 check_remote_monitor_rendering()
 
-;(function()
-    local original_transport_open_legacy = rednet_transport.open
-    local original_address_book_client_start_legacy = address_book_client.start
-    local original_command_broadcast_legacy = command_network.broadcast_command
-    local original_command_wait_legacy = command_network.wait_for_result
-    local original_print_legacy = print
-    local original_read_legacy = read
-    local start_legacy = nil
-    local printed_lines = {}
-    for index = 1, 8 do
-        local upvalue_name, upvalue_value = debug.getupvalue(dial_console.start, index)
-        if upvalue_name == "start_legacy" then
-            start_legacy = upvalue_value
-            break
-        end
-    end
-
-    rednet_transport.open = function(_side)
-        return result.ok(true)
-    end
-    address_book_client.start = function(_config)
-        return result.ok({
-            mode = "client",
-            cache_loaded = true,
-            book = validation.value,
-        })
-    end
-    command_network.broadcast_command = function(_config, _payload)
-        return result.ok({
-            msg_id = "legacy-dial",
-        })
-    end
-    command_network.wait_for_result = function(_config, expected_reply_to, _timeout_seconds, _options)
-        return result.ok({
-            reply_to = expected_reply_to,
-            payload = {
-                ok = true,
-                result = {
-                    dial_mode_used = "fast",
-                    state = {
-                        connected = false,
-                    },
-                },
-            },
-        })
-    end
-    print = function(...)
-        printed_lines[#printed_lines + 1] = table.concat({ ... }, " ")
-    end
-    read = (function()
-        local responses = {
-            "1",
-            "",
-        }
-        return function()
-            return table.remove(responses, 1) or ""
-        end
-    end)()
-
-    local legacy_started = start_legacy({
-        site = "command",
-        role = "dial_console",
-        modems = {
-            site = "bottom",
-            peripheral = nil,
-        },
-        address_book = {
-            mode = "client",
-            cache_path = "/sgc/cache/address_book.lua",
-            server_site = "command",
-            server_path = "/sgc/data/address_book.json",
-        },
-    }, nil)
-
-    rednet_transport.open = original_transport_open_legacy
-    address_book_client.start = original_address_book_client_start_legacy
-    command_network.broadcast_command = original_command_broadcast_legacy
-    command_network.wait_for_result = original_command_wait_legacy
-    print = original_print_legacy
-    read = original_read_legacy
-
-    if start_legacy == nil or not legacy_started.ok then
-        io.stderr:write("Dial console legacy start test failed\n")
-        os.exit(1)
-    end
-
-    for _, printed_line in ipairs(printed_lines) do
-        if printed_line == "Destinations" then
-            io.stderr:write("Dial console legacy menu still prints Destinations header\n")
-            os.exit(1)
-        end
-    end
-end)()
-
+local function check_section_14()
 do
     local manifest = {
         schema = 1,
@@ -4858,5 +5187,7 @@ do
         os.exit(1)
     end
 end
+end
+check_section_14()
 
 print(string.format("Checked %d Lua files", #files))

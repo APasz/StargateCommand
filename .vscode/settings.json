@@ -35,5 +35,6 @@
     "[teal]": {
         "editor.formatOnSave": false
     },
-    "python.languageServer": "None"
+    "python.languageServer": "None",
+    "stylua.targetReleaseVersion": "latest"
 }

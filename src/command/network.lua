@@ -70,7 +70,11 @@ function network.wait_for_result(config, expected_reply_to, timeout_seconds, opt
                 and incoming.envelope.reply_to == expected_reply_to
         end,
         active_logger,
-        active_options.on_unmatched
+        active_options.on_unmatched,
+        {
+            before_receive = active_options.before_receive,
+            poll_interval_seconds = active_options.poll_interval_seconds,
+        }
     )
     if not received.ok then
         if received.error == "receive_timeout" then
