@@ -455,11 +455,13 @@ end
 check_site_status_payload_handling()
 
 local original_settings = settings
+local original_os = os
 local original_startup_load_local_config = startup.load_local_config
 local original_update_preflight = require("services.update_client").preflight
 local original_main_run = require("main").run
 local motd_value = nil
 local settings_saved = false
+local startup_label = nil
 settings = {
     set = function(key, value)
         if key == "motd.enable" then
@@ -471,6 +473,13 @@ settings = {
         return true
     end,
 }
+os = setmetatable({
+    setComputerLabel = function(label)
+        startup_label = label
+    end,
+}, {
+    __index = original_os,
+})
 startup.load_local_config = function()
     return {
         site = "command",
@@ -492,12 +501,17 @@ end
 local startup_run_result = startup.run()
 
 settings = original_settings
+os = original_os
 startup.load_local_config = original_startup_load_local_config
 require("services.update_client").preflight = original_update_preflight
 require("main").run = original_main_run
 
-if startup_run_result ~= true or motd_value ~= false or settings_saved ~= true then
-    io.stderr:write("Startup did not disable motd automatically\n")
+if startup_run_result ~= true
+    or motd_value ~= false
+    or settings_saved ~= true
+    or startup_label ~= "command.site_controller"
+then
+    io.stderr:write("Startup did not disable motd automatically or sync the computer label\n")
     os.exit(1)
 end
 
@@ -1352,6 +1366,113 @@ do
         io.stderr:write("Alarm outgoing connection signal evaluation failed\n")
         os.exit(1)
     end
+
+    ;(function()
+        local function find_upvalue(func, wanted_name)
+            for index = 1, 64 do
+                local upvalue_name, upvalue_value = debug.getupvalue(func, index)
+                if upvalue_name == nil then
+                    return nil
+                end
+                if upvalue_name == wanted_name then
+                    return upvalue_value
+                end
+            end
+
+            return nil
+        end
+
+        local time_module = require("core.time")
+        local serve_receive_loop = find_upvalue(alarm_controller.start, "serve_receive_loop")
+        local evaluate_runtime = serve_receive_loop ~= nil and find_upvalue(serve_receive_loop, "evaluate_runtime") or nil
+        local stale_timeout_ms = evaluate_runtime ~= nil and find_upvalue(evaluate_runtime, "stale_timeout_ms") or nil
+        local original_time_now_ms = time_module.now_ms
+        local now_ms = 0
+
+        local function build_alarm_runtime(gate_state_snapshot)
+            return {
+                config = {},
+                alarm = {
+                    trigger_on_fault = true,
+                    outputs = {},
+                    speaker = {
+                        bindings = {},
+                        peripheral_side = nil,
+                    },
+                },
+                speaker = alarm_speaker.new_runtime({
+                    bindings = {},
+                    peripheral_side = nil,
+                }),
+                signal_state = alarm_signal.new_state(),
+                output_state = alarm_output.new_state(),
+                monitor = alarm_monitor.new_state(),
+                last_gate_fault = nil,
+                last_site_fault = nil,
+                last_gate_state = gate_state_snapshot,
+                last_gate_state_at = 0,
+                last_site_status = {
+                    site = "command",
+                    role = "site_controller",
+                    healthy = true,
+                    warnings_count = 0,
+                    address_book_available = true,
+                },
+                last_site_status_at = 0,
+            }
+        end
+
+        time_module.now_ms = function()
+            return now_ms
+        end
+
+        local active_gate_state = {
+            connected = false,
+            open = false,
+            partial_dial = true,
+            dialing_out = false,
+            activity = "partial_dial",
+            connection_direction = "outgoing",
+        }
+        local active_timeout = stale_timeout_ms ~= nil and stale_timeout_ms(active_gate_state) or nil
+
+        now_ms = 120000
+        local active_before_timeout = evaluate_runtime ~= nil and evaluate_runtime(build_alarm_runtime(active_gate_state), nil) or nil
+
+        now_ms = 6000
+        local idle_after_timeout = evaluate_runtime ~= nil and evaluate_runtime(build_alarm_runtime({
+            connected = false,
+            open = false,
+            partial_dial = false,
+            dialing_out = false,
+            activity = "idle",
+            connection_direction = nil,
+        }), nil) or nil
+
+        now_ms = type(active_timeout) == "number" and active_timeout + 1 or 180001
+        local active_after_timeout = evaluate_runtime ~= nil and evaluate_runtime(build_alarm_runtime(active_gate_state), nil) or nil
+
+        time_module.now_ms = original_time_now_ms
+
+        if serve_receive_loop == nil
+            or evaluate_runtime == nil
+            or stale_timeout_ms == nil
+            or type(active_timeout) ~= "number"
+            or active_timeout < 180000
+            or not active_before_timeout.ok
+            or active_before_timeout.value.site_fault ~= nil
+            or active_before_timeout.value.site_status == nil
+            or not idle_after_timeout.ok
+            or idle_after_timeout.value.site_fault ~= "stale_site_status"
+            or idle_after_timeout.value.site_status ~= nil
+            or not active_after_timeout.ok
+            or active_after_timeout.value.site_fault ~= "stale_site_status"
+            or active_after_timeout.value.site_status ~= nil
+        then
+            io.stderr:write("Alarm active dial stale timeout evaluation failed\n")
+            os.exit(1)
+        end
+    end)()
 
     local invalid_alarm_speaker_pattern = config_schema.validate(config_defaults.for_role("alarm_controller", {
         alarm = {
@@ -3909,7 +4030,7 @@ local function check_remote_monitor_rendering()
     end
 
     local function find_upvalue(func, wanted_name)
-        for index = 1, 32 do
+        for index = 1, 64 do
             local upvalue_name, upvalue_value = debug.getupvalue(func, index)
             if upvalue_name == nil then
                 return nil
@@ -4113,14 +4234,22 @@ local function check_remote_monitor_rendering()
         local start_interactive = find_upvalue(dial_console.start, "start_interactive")
         local controller_loop = start_interactive ~= nil and find_upvalue(start_interactive, "controller_loop") or nil
         local render_monitor = controller_loop ~= nil and find_upvalue(controller_loop, "render_monitor") or nil
+        local render_home_page = render_monitor ~= nil and find_upvalue(render_monitor, "render_home_page") or nil
+        local render_outgoing_page = render_monitor ~= nil and find_upvalue(render_monitor, "render_outgoing_page") or nil
+        local engaged_outgoing_progress = render_monitor ~= nil
+                and find_upvalue(render_monitor, "engaged_outgoing_progress")
+            or nil
         local outgoing_progress_highlight = render_monitor ~= nil
                 and find_upvalue(render_monitor, "outgoing_progress_highlight")
             or nil
         local render_outgoing_address_progress = render_monitor ~= nil
                 and find_upvalue(render_monitor, "render_outgoing_address_progress")
             or nil
+        local write_monitor_top_bar_line = render_monitor ~= nil
+                and find_upvalue(render_monitor, "write_monitor_top_bar_line")
+            or nil
 
-        local function render_symbol_colors(highlight)
+        local function render_symbol_colors(engaged_progress, highlight)
             local writes = {}
             local cursor_x = 1
             local cursor_y = 1
@@ -4147,7 +4276,14 @@ local function check_remote_monitor_rendering()
                 end,
             }
 
-            render_outgoing_address_progress(terminal, 39, 5, { 9, 11, 14, 21, 22, 29, 0 }, 2, highlight)
+            render_outgoing_address_progress(
+                terminal,
+                39,
+                5,
+                { 9, 11, 14, 21, 22, 29, 0 },
+                engaged_progress,
+                highlight
+            )
 
             local symbol_colors = {}
             for _, write_call in ipairs(writes) do
@@ -4162,26 +4298,262 @@ local function check_remote_monitor_rendering()
             return symbol_colors
         end
 
+        local function render_top_bar_chunks(top_bar)
+            local writes = {}
+            local cursor_x = 1
+            local cursor_y = 1
+            local current_color = colors.white
+            local terminal = {
+                isColor = function()
+                    return true
+                end,
+                setCursorPos = function(x, y)
+                    cursor_x = x
+                    cursor_y = y
+                end,
+                setTextColor = function(color)
+                    current_color = color
+                end,
+                write = function(text)
+                    writes[#writes + 1] = {
+                        text = text,
+                        color = current_color,
+                        x = cursor_x,
+                        y = cursor_y,
+                    }
+                    cursor_x = cursor_x + #text
+                end,
+            }
+
+            write_monitor_top_bar_line(terminal, 39, 1, top_bar)
+            return writes
+        end
+
         local basic_highlight = outgoing_progress_highlight({
             gate_state = {
                 interface_type = "basic_interface",
                 current_symbol = 11,
             },
         }, { 9, 11, 14, 21, 22, 29, 0 }, 2)
-        local basic_symbol_colors = render_symbol_colors(basic_highlight)
+        local basic_symbol_colors = render_symbol_colors(2, basic_highlight)
         local exact_highlight = outgoing_progress_highlight({
             gate_state = {
                 interface_type = "advanced_crystal_interface",
+                stargate_generation = 2,
+                open = false,
+                connected = false,
                 current_symbol = 14,
             },
+            selected_mode = "medium",
         }, { 9, 11, 14, 21, 22, 29, 0 }, 2)
-        local exact_symbol_colors = render_symbol_colors(exact_highlight)
+        local exact_symbol_colors = render_symbol_colors(2, exact_highlight)
+        local fast_start_runtime = {
+            selected_mode = "fast",
+            gate_state = {
+                interface_type = "advanced_crystal_interface",
+                stargate_generation = 2,
+                open = false,
+                connected = false,
+                current_symbol = 0,
+                chevrons_engaged = 0,
+            },
+        }
+        local fast_start_engaged = engaged_outgoing_progress(fast_start_runtime, { 9, 11, 14, 21, 22, 29, 0 })
+        local fast_start_highlight =
+            outgoing_progress_highlight(fast_start_runtime, { 9, 11, 14, 21, 22, 29, 0 }, fast_start_engaged)
+        local fast_start_symbol_colors = render_symbol_colors(fast_start_engaged, fast_start_highlight)
+        local fast_final_runtime = {
+            selected_mode = "fast",
+            gate_state = {
+                interface_type = "advanced_crystal_interface",
+                stargate_generation = 2,
+                open = false,
+                connected = false,
+                current_symbol = 0,
+                chevrons_engaged = 6,
+            },
+        }
+        local fast_final_engaged = engaged_outgoing_progress(fast_final_runtime, { 9, 11, 14, 21, 22, 29, 0 })
+        local fast_final_highlight =
+            outgoing_progress_highlight(fast_final_runtime, { 9, 11, 14, 21, 22, 29, 0 }, fast_final_engaged)
+        local fast_final_symbol_colors = render_symbol_colors(fast_final_engaged, fast_final_highlight)
+        local auto_final_runtime = {
+            selected_mode = "auto",
+            gate_state = {
+                interface_type = "advanced_crystal_interface",
+                stargate_generation = 2,
+                open = false,
+                connected = false,
+                current_symbol = 0,
+                chevrons_engaged = 6,
+            },
+        }
+        local auto_final_engaged = engaged_outgoing_progress(auto_final_runtime, { 9, 11, 14, 21, 22, 29, 0 })
+        local auto_final_highlight =
+            outgoing_progress_highlight(auto_final_runtime, { 9, 11, 14, 21, 22, 29, 0 }, auto_final_engaged)
+        local auto_final_symbol_colors = render_symbol_colors(auto_final_engaged, auto_final_highlight)
+        local connected_final_runtime = {
+            selected_mode = "auto",
+            gate_state = {
+                interface_type = "advanced_crystal_interface",
+                stargate_generation = 2,
+                open = true,
+                connected = true,
+                current_symbol = 0,
+                chevrons_engaged = 6,
+            },
+        }
+        local connected_final_engaged =
+            engaged_outgoing_progress(connected_final_runtime, { 9, 11, 14, 21, 22, 29, 0 })
+        local connected_final_highlight = outgoing_progress_highlight(
+            connected_final_runtime,
+            { 9, 11, 14, 21, 22, 29, 0 },
+            connected_final_engaged
+        )
+        local connected_final_symbol_colors = render_symbol_colors(connected_final_engaged, connected_final_highlight)
+        local dialing_symbol_lines = render_outgoing_page({
+            selected_mode = "medium",
+            outgoing_session = {
+                name = "Dialing Target",
+                address = { 9, 11, 14, 21, 22, 29 },
+            },
+            gate_state = {
+                interface_type = "advanced_crystal_interface",
+                stargate_generation = 2,
+                open = false,
+                connected = false,
+                current_symbol = 14,
+                chevrons_engaged = 2,
+                activity = "dialing_out",
+            },
+        }, 39, 10)
+        local symbol_line_found = false
+        for _, line in ipairs(dialing_symbol_lines) do
+            if line:find("Symbol:", 1, true) ~= nil then
+                symbol_line_found = true
+                break
+            end
+        end
+
+        local connected_monitor_writes = {}
+        local connected_cursor_x = 1
+        local connected_cursor_y = 1
+        local connected_color = colors.white
+        local connected_terminal = {
+            isColor = function()
+                return true
+            end,
+            setCursorPos = function(x, y)
+                connected_cursor_x = x
+                connected_cursor_y = y
+            end,
+            setTextColor = function(color)
+                connected_color = color
+            end,
+            write = function(text)
+                connected_monitor_writes[#connected_monitor_writes + 1] = {
+                    text = text,
+                    color = connected_color,
+                    x = connected_cursor_x,
+                    y = connected_cursor_y,
+                }
+                connected_cursor_x = connected_cursor_x + #text
+            end,
+        }
+        render_monitor({
+            config = {
+                site = "command",
+                role = "dial_console",
+                modems = {
+                    peripheral = "top",
+                },
+            },
+            selected_mode = "auto",
+            book = validation.value,
+            outgoing_session = {
+                name = "Connected Target",
+                address = { 9, 11, 14, 21, 22, 29 },
+            },
+            outgoing_connected_at = 1000,
+            gate_state = {
+                interface_type = "advanced_crystal_interface",
+                stargate_generation = 2,
+                open = true,
+                connected = true,
+                connection_direction = "outgoing",
+                activity = "outgoing_connected",
+                current_symbol = 0,
+                chevrons_engaged = 6,
+            },
+            monitor_session = {
+                side = "top",
+                text_scale = constants.DEFAULT_MONITOR_TEXT_SCALE,
+                terminal = connected_terminal,
+                width = 39,
+                height = 10,
+                id = "monitor_0",
+                last_lines = nil,
+                last_progress_signature = nil,
+            },
+            monitor_touch_targets = nil,
+            monitor_top_bar = nil,
+        })
+        local connected_monitor_symbols = {}
+        for _, write_call in ipairs(connected_monitor_writes) do
+            if write_call.y == 5
+                and write_call.text ~= "Address: "
+                and write_call.text ~= "-"
+                and write_call.text:match("%S") ~= nil
+                and write_call.x > #"Address: "
+            then
+                connected_monitor_symbols[#connected_monitor_symbols + 1] = {
+                    text = write_call.text,
+                    color = write_call.color,
+                }
+            end
+        end
+        local paged_home_runtime = {
+            selected_mode = "fast",
+            gate_state = {
+                interface_type = "basic_interface",
+                stargate_generation = 2,
+            },
+            destinations = {
+                { id = "site-1", name = "One" },
+                { id = "site-2", name = "Two" },
+                { id = "site-3", name = "Three" },
+                { id = "site-4", name = "Four" },
+                { id = "site-5", name = "Five" },
+                { id = "site-6", name = "Six" },
+                { id = "site-7", name = "Seven" },
+                { id = "site-8", name = "Eight" },
+                { id = "site-9", name = "Nine" },
+            },
+            monitor_touch_targets = nil,
+            monitor_top_bar = nil,
+        }
+        local paged_home_lines = render_home_page(paged_home_runtime, 39, 6)
+        local paged_top_bar_chunks = render_top_bar_chunks(paged_home_runtime.monitor_top_bar)
+        local tiny_home_runtime = {
+            selected_mode = "auto",
+            gate_state = nil,
+            destinations = {
+                { id = "site-1", name = "One" },
+            },
+            monitor_touch_targets = nil,
+            monitor_top_bar = nil,
+        }
+        local tiny_home_lines = render_home_page(tiny_home_runtime, 3, 1)
 
         if start_interactive == nil
             or controller_loop == nil
             or render_monitor == nil
+            or render_home_page == nil
+            or render_outgoing_page == nil
+            or engaged_outgoing_progress == nil
             or outgoing_progress_highlight == nil
             or render_outgoing_address_progress == nil
+            or write_monitor_top_bar_line == nil
             or basic_highlight == nil
             or basic_highlight.index ~= 3
             or basic_highlight.exact ~= false
@@ -4202,8 +4574,52 @@ local function check_remote_monitor_rendering()
             or exact_symbol_colors[3].color ~= colors.yellow
             or exact_symbol_colors[4] == nil
             or exact_symbol_colors[4].color ~= colors.gray
+            or fast_start_engaged ~= 0
+            or fast_start_highlight == nil
+            or fast_start_highlight.index ~= 1
+            or fast_start_highlight.exact ~= false
+            or fast_start_symbol_colors[1] == nil
+            or fast_start_symbol_colors[1].color ~= colors.orange
+            or fast_start_symbol_colors[7] == nil
+            or fast_start_symbol_colors[7].color ~= colors.gray
+            or fast_final_engaged ~= 6
+            or fast_final_highlight ~= nil
+            or fast_final_symbol_colors[7] == nil
+            or fast_final_symbol_colors[7].text ~= "0"
+            or fast_final_symbol_colors[7].color ~= colors.gray
+            or auto_final_engaged ~= 6
+            or auto_final_highlight ~= nil
+            or auto_final_symbol_colors[7] == nil
+            or auto_final_symbol_colors[7].text ~= "0"
+            or auto_final_symbol_colors[7].color ~= colors.gray
+            or connected_final_engaged ~= 7
+            or connected_final_highlight ~= nil
+            or connected_final_symbol_colors[7] == nil
+            or connected_final_symbol_colors[7].text ~= "0"
+            or connected_final_symbol_colors[7].color ~= colors.lime
+            or symbol_line_found == true
+            or connected_monitor_symbols[7] == nil
+            or connected_monitor_symbols[7].text ~= "0"
+            or connected_monitor_symbols[7].color ~= colors.lime
+            or paged_home_runtime.monitor_top_bar == nil
+            or paged_home_runtime.monitor_touch_targets == nil
+            or paged_home_runtime.monitor_touch_targets.mode == nil
+            or paged_home_runtime.monitor_touch_targets.mode.y ~= 1
+            or paged_home_runtime.monitor_touch_targets.next_page == nil
+            or paged_home_runtime.monitor_touch_targets.next_page.y ~= 1
+            or paged_home_runtime.monitor_touch_targets.previous_page ~= nil
+            or paged_home_lines[1]:find("Destinations", 1, true) ~= nil
+            or paged_home_lines[1]:find("1/2", 1, true) == nil
+            or paged_home_lines[1]:find(">", 1, true) == nil
+            or paged_top_bar_chunks[2] == nil
+            or paged_top_bar_chunks[2].text ~= "FAST"
+            or paged_top_bar_chunks[2].color ~= colors.lightGray
+            or tiny_home_lines[1] == nil
+            or #tiny_home_lines ~= 1
+            or tiny_home_runtime.monitor_touch_targets == nil
+            or #tiny_home_runtime.monitor_touch_targets.destinations ~= 0
         then
-            io.stderr:write("Dial console progress highlighting failed\n")
+            io.stderr:write("Dial console monitor rendering failed\n")
             os.exit(1)
         end
     end

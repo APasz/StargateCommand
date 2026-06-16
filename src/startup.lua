@@ -153,6 +153,58 @@ local function load_installed_version_fields(config)
     return fields
 end
 
+---@param config table
+---@return string
+local function build_computer_label(config)
+    return string.format("%s.%s", config.site, config.role)
+end
+
+---@return string?
+local function get_computer_label()
+    if type(os) == "table" and type(os.getComputerLabel) == "function" then
+        local ok, label = pcall(os.getComputerLabel)
+        if ok and type(label) == "string" and label ~= "" then
+            return label
+        end
+    end
+
+    return nil
+end
+
+---@param label string
+---@return boolean, table?
+local function set_computer_label(label)
+    if type(os) == "table" and type(os.setComputerLabel) == "function" then
+        local ok, set_error = pcall(os.setComputerLabel, label)
+        if not ok then
+            return false, {
+                api = "os.setComputerLabel",
+                cause = tostring(set_error),
+                label = label,
+            }
+        end
+
+        return true, nil
+    end
+
+    return false, {
+        api = "os.setComputerLabel",
+        cause = "missing_api",
+        label = label,
+    }
+end
+
+---@param config table
+---@return boolean, table?
+local function sync_computer_label(config)
+    local desired_label = build_computer_label(config)
+    if get_computer_label() == desired_label then
+        return true, nil
+    end
+
+    return set_computer_label(desired_label)
+end
+
 ---@return boolean
 function startup.run()
     if not disable_motd() then
@@ -168,6 +220,11 @@ function startup.run()
         return fail("missing config", {
             expected_paths = constants.DEFAULT_CONFIG_PATHS,
         })
+    end
+
+    local label_synced, label_error = sync_computer_label(config)
+    if not label_synced then
+        return fail("failed to set computer label", label_error)
     end
 
     local update_logger = log.new(

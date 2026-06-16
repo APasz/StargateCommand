@@ -4,10 +4,10 @@ local command_message = require("command.message")
 local command_network = require("command.network")
 local command_timeout = require("command.timeout")
 local constants = require("core.constants")
+local gate_capabilities = require("gate.capabilities")
 local discovery = require("net.discovery")
 local gate_message = require("gate.message")
 local host_lifecycle = require("lifecycle.host")
-local net_inbox = require("net.inbox")
 local result = require("core.result")
 local site_message = require("site.message")
 local tablex = require("core.tablex")
@@ -22,14 +22,17 @@ local NETWORK_RECEIVE_TIMEOUT_SECONDS = 0.25
 local CANCELLED_PAGE_DURATION_MS = 4000
 local GATE_STATE_STALE_MS = 8000
 local STATE_FALLBACK_REQUEST_INTERVAL_MS = 3000
+local MIN_MONITOR_WIDTH = 3
+local MIN_MONITOR_HEIGHT = 1
+local PEGASUS_STARGATE_GENERATION = 3
 local INPUT_EVENT = "sgc_dial_console_input"
 local NETWORK_EVENT = "sgc_dial_console_network"
 local NETWORK_ERROR_EVENT = "sgc_dial_console_network_error"
 local DIAL_MODE_CYCLE = {
     "auto",
-    "fast",
-    "medium",
     "slow",
+    "medium",
+    "fast",
 }
 local send_request
 local current_page
@@ -38,6 +41,33 @@ local blank_buffer
 local print_terminal_feedback
 local monitor_supports_color
 local set_monitor_text_color
+
+local INTERACTIVE_TERMINAL_COMMAND_SPECS = {
+    {
+        summary = "help",
+        description = "Show available commands",
+    },
+    {
+        summary = "<number|name>",
+        description = "Dial a destination by number or exact name",
+    },
+    {
+        summary = "mode <auto|slow|medium|fast>",
+        description = "Set the preferred dial mode",
+    },
+    {
+        summary = "refresh",
+        description = "Refresh the address book cache",
+    },
+}
+
+---@class SgcDialConsoleTopBar
+---@field line string
+---@field mode_x integer?
+---@field mode_width integer
+---@field mode_available boolean
+---@field previous_x integer?
+---@field next_x integer?
 
 ---@param prompt string
 ---@return SgcResult
@@ -60,16 +90,6 @@ end
 ---@return SgcSiteEntry[]
 local function visible_destinations(book, site_id)
     return address_book.list_visible_destinations(book, site_id)
-end
-
----@param payload table
----@return SgcResult
-local function normalize_remote_result(payload)
-    if payload.ok == true then
-        return result.ok(payload.result)
-    end
-
-    return result.err(payload.error, payload.details)
 end
 
 ---@param config table
@@ -163,8 +183,17 @@ end
 local function top_bar(left, right, width)
     local left_text = tostring(left or "")
     local right_text = tostring(right or "")
-    if #left_text + #right_text >= width then
-        return (left_text .. " " .. right_text):sub(1, width)
+    if width <= 0 then
+        return ""
+    end
+
+    if #right_text >= width then
+        return right_text:sub(#right_text - width + 1)
+    end
+
+    if #left_text + 1 + #right_text > width then
+        local left_width = math.max(0, width - #right_text - 1)
+        return left_text:sub(1, left_width) .. " " .. right_text
     end
 
     return left_text .. string.rep(" ", width - #left_text - #right_text) .. right_text
@@ -182,6 +211,34 @@ local function next_dial_mode(current_mode)
     return constants.DEFAULT_DIAL_MODE
 end
 
+---@param runtime table
+---@param dial_mode SgcDialMode
+---@return boolean
+local function dial_mode_available(runtime, dial_mode)
+    if dial_mode == "auto" then
+        return true
+    end
+
+    local gate_state = runtime.gate_state
+    if type(gate_state) ~= "table" or type(gate_state.interface_type) ~= "string" then
+        return true
+    end
+
+    local capabilities = gate_capabilities.for_type(gate_state.interface_type)
+    if dial_mode == "fast" then
+        return capabilities.direct_dial == true
+    end
+
+    if dial_mode == "medium" or dial_mode == "slow" then
+        return capabilities.rotation == true
+            and capabilities.chevron == true
+            and capabilities.stargate_info == true
+            and gate_state.stargate_generation ~= PEGASUS_STARGATE_GENERATION
+    end
+
+    return true
+end
+
 ---@param config table
 ---@return number
 local function monitor_text_scale(config)
@@ -191,6 +248,12 @@ local function monitor_text_scale(config)
     end
 
     return constants.DEFAULT_MONITOR_TEXT_SCALE
+end
+
+---@param config table
+---@return string
+local function fallback_terminal_label(config)
+    return string.format("%s.%s", tostring(config.site), tostring(config.role))
 end
 
 ---@param game_time number?
@@ -354,17 +417,63 @@ end
 ---@param height integer
 ---@return integer, integer, integer, integer, integer
 local function home_page_layout(runtime, width, height)
-    local body_top = math.min(height, 3)
-    local body_bottom = math.max(body_top, height - 1)
-    local rows = math.max(1, body_bottom - body_top + 1)
+    local body_top = 2
+    local footer_rows = height >= 2 and 1 or 0
+    local body_bottom = height - footer_rows
+    local rows = math.max(0, body_bottom - body_top + 1)
     local gutter = width >= 36 and 2 or 1
     local min_item_width = width >= 36 and 18 or 16
     local columns = math.max(1, math.floor((width + gutter) / (min_item_width + gutter)))
     local item_width = math.max(1, math.floor((width - (columns - 1) * gutter) / columns))
-    local page_size = math.max(1, rows * columns)
+    local page_size = rows > 0 and rows * columns or 0
     local destination_count = #(runtime.destinations or {})
-    local page_count = math.max(1, math.ceil(destination_count / page_size))
+    local page_count = page_size > 0 and math.max(1, math.ceil(destination_count / page_size)) or 1
     return body_top, rows, columns, item_width, page_count
+end
+
+---@param runtime table
+---@param width integer
+---@param page_index integer?
+---@param page_count integer?
+---@return SgcDialConsoleTopBar
+local function build_top_bar_spec(runtime, width, page_index, page_count)
+    local mode_label = string.upper(runtime.selected_mode)
+    local right_parts = {}
+    if type(page_index) == "number" and type(page_count) == "number" and page_count > 1 then
+        if page_index > 1 then
+            right_parts[#right_parts + 1] = "<"
+        end
+        right_parts[#right_parts + 1] = string.format("%d/%d", page_index, page_count)
+        if page_index < page_count then
+            right_parts[#right_parts + 1] = ">"
+        end
+    end
+    right_parts[#right_parts + 1] = mode_label
+
+    local right_text = table.concat(right_parts, " ")
+    local line = fit_line(top_bar(current_clock_label(), right_text, width), width)
+    local right_start = math.max(1, width - #right_text + 1)
+    local mode_x = math.max(right_start, width - #mode_label + 1)
+    local mode_width = math.max(0, math.min(#mode_label, width - mode_x + 1))
+    local previous_x = nil
+    local next_x = nil
+    local previous_offset = right_text:find("<", 1, true)
+    local next_offset = right_text:find(">", 1, true)
+    if previous_offset ~= nil then
+        previous_x = right_start + previous_offset - 1
+    end
+    if next_offset ~= nil then
+        next_x = right_start + next_offset - 1
+    end
+
+    return {
+        line = line,
+        mode_x = mode_width > 0 and mode_x or nil,
+        mode_width = mode_width,
+        mode_available = dial_mode_available(runtime, runtime.selected_mode),
+        previous_x = previous_x,
+        next_x = next_x,
+    }
 end
 
 ---@param runtime table
@@ -390,7 +499,8 @@ end
 ---@return string[]
 local function render_detail_page(runtime, width, height, title, headline, detail_lines, footer, alert)
     local buffer = blank_buffer(width, height)
-    buffer[1] = fit_line(top_bar(current_clock_label(), string.upper(runtime.selected_mode), width), width)
+    runtime.monitor_top_bar = build_top_bar_spec(runtime, width, nil, nil)
+    buffer[1] = runtime.monitor_top_bar.line
     if height >= 2 then
         buffer[2] = page_title_line(title, width, alert)
     end
@@ -401,7 +511,7 @@ local function render_detail_page(runtime, width, height, title, headline, detai
     end
 
     local row = 3
-    local max_body_row = math.max(2, height - 1)
+    local max_body_row = height >= 3 and math.max(2, height - 1) or 1
     for _, line in ipairs(body_lines) do
         if row > max_body_row then
             break
@@ -411,7 +521,9 @@ local function render_detail_page(runtime, width, height, title, headline, detai
         row = row + 1
     end
 
-    buffer[height] = fit_line(footer, width)
+    if height >= 2 then
+        buffer[height] = fit_line(footer, width)
+    end
     return buffer
 end
 
@@ -813,49 +925,107 @@ local function target_address(runtime)
     return {}
 end
 
+---@class SgcOutgoingProgressHighlight
+---@field index integer
+---@field exact boolean
+
+---@class SgcOutgoingProgressState
+---@field engaged integer
+---@field highlight SgcOutgoingProgressHighlight?
+
+---@param address integer[]
+---@param symbol integer?
+---@param start_index integer
+---@return integer?
+local function matching_outgoing_symbol_index(address, symbol, start_index)
+    if type(symbol) ~= "number" or symbol == constants.POINT_OF_ORIGIN_SYMBOL then
+        return nil
+    end
+
+    for index = math.max(1, start_index), #address do
+        if address[index] == symbol then
+            return index
+        end
+    end
+
+    return nil
+end
+
+---@param runtime table
+---@return "direct" | "rotating"
+local function outgoing_progress_style(runtime)
+    if runtime.selected_mode == "fast" then
+        return "direct"
+    end
+
+    if runtime.selected_mode == "medium" or runtime.selected_mode == "slow" then
+        return "rotating"
+    end
+
+    local gate_state = runtime.gate_state
+    if type(gate_state) ~= "table" or type(gate_state.interface_type) ~= "string" then
+        return "rotating"
+    end
+
+    local capabilities = gate_capabilities.for_type(gate_state.interface_type)
+    return capabilities.direct_dial == true and "direct" or "rotating"
+end
+
+---@param runtime table
+---@param address integer[]
+---@param engaged_override integer?
+---@return SgcOutgoingProgressState
+local function outgoing_progress_state(runtime, address, engaged_override)
+    local gate_state = runtime.gate_state or {}
+    local progress = type(engaged_override) == "number"
+            and engaged_override
+        or type(gate_state.chevrons_engaged) == "number" and gate_state.chevrons_engaged
+        or 0
+    local engaged = math.max(0, math.min(progress, #address))
+    if gate_has_live_connection(runtime) then
+        return {
+            engaged = #address,
+            highlight = nil,
+        }
+    end
+
+    local style = outgoing_progress_style(runtime)
+    local current_index = style == "rotating"
+        and matching_outgoing_symbol_index(address, gate_state.current_symbol, engaged + 1)
+        or nil
+
+    local highlight = nil
+    if current_index ~= nil then
+        highlight = {
+            index = current_index,
+            exact = true,
+        }
+    elseif engaged < #address and address[engaged + 1] ~= constants.POINT_OF_ORIGIN_SYMBOL then
+        highlight = {
+            index = engaged + 1,
+            exact = false,
+        }
+    end
+
+    return {
+        engaged = engaged,
+        highlight = highlight,
+    }
+end
+
 ---@param runtime table
 ---@param address integer[]
 ---@return integer
 local function engaged_outgoing_progress(runtime, address)
-    local gate_state = runtime.gate_state or {}
-    local progress = type(gate_state.chevrons_engaged) == "number" and gate_state.chevrons_engaged or 0
-    if gate_has_live_connection(runtime) and progress <= 0 then
-        return #address
-    end
-
-    return math.max(0, math.min(progress, #address))
+    return outgoing_progress_state(runtime, address).engaged
 end
-
----@class SgcOutgoingProgressHighlight
----@field index integer
----@field exact boolean
 
 ---@param runtime table
 ---@param address integer[]
 ---@param engaged_progress integer
 ---@return SgcOutgoingProgressHighlight?
 local function outgoing_progress_highlight(runtime, address, engaged_progress)
-    local clamped_progress = math.max(0, math.min(engaged_progress, #address))
-    local gate_state = runtime.gate_state or {}
-    if type(gate_state.current_symbol) == "number" then
-        for index = clamped_progress + 1, #address do
-            if address[index] == gate_state.current_symbol then
-                return {
-                    index = index,
-                    exact = true,
-                }
-            end
-        end
-    end
-
-    if clamped_progress < #address then
-        return {
-            index = clamped_progress + 1,
-            exact = false,
-        }
-    end
-
-    return nil
+    return outgoing_progress_state(runtime, address, engaged_progress).highlight
 end
 
 ---@param runtime table
@@ -864,54 +1034,38 @@ end
 ---@return string[]
 local function render_home_page(runtime, width, height)
     local buffer = blank_buffer(width, height)
-    local mode_label = string.upper(runtime.selected_mode)
-    buffer[1] = fit_line(top_bar(current_clock_label(), mode_label, width), width)
-    runtime.monitor_touch_targets = {
-        mode = {
-            x = math.max(1, width - #mode_label + 1),
-            y = 1,
-            width = math.min(width, #mode_label),
-            height = 1,
-        },
-        previous_page = nil,
-        next_page = nil,
-        destinations = {},
-    }
-
     local destinations = runtime.destinations
     local body_top, rows, columns, item_width, page_count = home_page_layout(runtime, width, height)
     local page_index = clamp_home_page(runtime, width, height)
-
-    local previous_label = page_index > 1 and "< Prev" or ""
-    local next_label = page_index < page_count and "Next >" or ""
-    local title = page_count > 1
-            and string.format("Destinations %d/%d", page_index, page_count)
-        or "Destinations"
-    if height >= 2 then
-        buffer[2] = action_line(width, previous_label, title, next_label)
-    end
-
-    if previous_label ~= "" then
-        runtime.monitor_touch_targets.previous_page = {
-            x = 1,
-            y = 2,
-            width = #previous_label,
+    runtime.monitor_top_bar = build_top_bar_spec(runtime, width, page_index, page_count)
+    buffer[1] = runtime.monitor_top_bar.line
+    runtime.monitor_touch_targets = {
+        mode = runtime.monitor_top_bar.mode_x ~= nil and {
+            x = runtime.monitor_top_bar.mode_x,
+            y = 1,
+            width = runtime.monitor_top_bar.mode_width,
             height = 1,
-        }
-    end
-
-    if next_label ~= "" then
-        runtime.monitor_touch_targets.next_page = {
-            x = math.max(1, width - #next_label + 1),
-            y = 2,
-            width = #next_label,
+        } or nil,
+        previous_page = runtime.monitor_top_bar.previous_x ~= nil and {
+            x = runtime.monitor_top_bar.previous_x,
+            y = 1,
+            width = 1,
             height = 1,
-        }
-    end
+        } or nil,
+        next_page = runtime.monitor_top_bar.next_x ~= nil and {
+            x = runtime.monitor_top_bar.next_x,
+            y = 1,
+            width = 1,
+            height = 1,
+        } or nil,
+        destinations = {},
+    }
 
     if #destinations == 0 then
-        buffer[3] = centered_line("No destinations", width)
-        buffer[height] = fit_line(footer_text(runtime, "Refresh address book to retry"), width)
+        if height >= 2 then
+            buffer[2] = centered_line("No destinations", width)
+            buffer[height] = fit_line(footer_text(runtime, "Refresh address book to retry"), width)
+        end
         return buffer
     end
 
@@ -942,10 +1096,12 @@ local function render_home_page(runtime, width, height)
         end
     end
 
-    local default_footer = page_count > 1
-            and "Tap destination; use Prev/Next for more"
-        or "Tap destination to dial"
-    buffer[height] = fit_line(footer_text(runtime, default_footer), width)
+    if height >= 2 then
+        local default_footer = page_count > 1
+                and "Tap destination; use Prev/Next for more"
+            or "Tap destination to dial"
+        buffer[height] = fit_line(footer_text(runtime, default_footer), width)
+    end
 
     return buffer
 end
@@ -972,16 +1128,13 @@ end
 local function render_outgoing_page(runtime, width, height)
     local gate_state = runtime.gate_state or {}
     local address = target_address(runtime)
-    local chevrons_engaged = type(gate_state.chevrons_engaged) == "number" and gate_state.chevrons_engaged or 0
+    local progress_state = outgoing_progress_state(runtime, address)
     local detail_lines = {
         "",
         detail_line("Address", format_address(address)),
-        detail_line("Chevrons", string.format("%d/%d", chevrons_engaged, #address)),
+        detail_line("Chevrons", string.format("%d/%d", progress_state.engaged, #address)),
         detail_line("State", format_activity_label(gate_state.activity, "pending")),
     }
-    if gate_state.current_symbol ~= nil then
-        detail_lines[#detail_lines + 1] = detail_line("Symbol", tostring(gate_state.current_symbol))
-    end
 
     return render_detail_page(
         runtime,
@@ -1063,6 +1216,39 @@ end
 local function write_monitor_line(terminal, width, row, text)
     terminal.setCursorPos(1, row)
     terminal.write(fit_line(text or "", width))
+end
+
+---@param terminal table
+---@param width integer
+---@param row integer
+---@param top_bar SgcDialConsoleTopBar?
+local function write_monitor_top_bar_line(terminal, width, row, top_bar)
+    local line = type(top_bar) == "table" and top_bar.line or ""
+    local normalized = fit_line(line, width)
+    if type(top_bar) ~= "table"
+        or not monitor_supports_color(terminal)
+        or type(colors) ~= "table"
+        or top_bar.mode_available ~= false
+        or type(top_bar.mode_x) ~= "number"
+        or type(top_bar.mode_width) ~= "number"
+        or top_bar.mode_width <= 0
+    then
+        write_monitor_line(terminal, width, row, normalized)
+        return
+    end
+
+    local unavailable_color = colors.lightGray or colors.gray or colors.white
+    local before = normalized:sub(1, top_bar.mode_x - 1)
+    local mode_text = normalized:sub(top_bar.mode_x, top_bar.mode_x + top_bar.mode_width - 1)
+    local after = normalized:sub(top_bar.mode_x + top_bar.mode_width)
+
+    terminal.setCursorPos(1, row)
+    set_monitor_text_color(terminal, colors.white or unavailable_color)
+    terminal.write(before)
+    set_monitor_text_color(terminal, unavailable_color)
+    terminal.write(mode_text)
+    set_monitor_text_color(terminal, colors.white or unavailable_color)
+    terminal.write(after)
 end
 
 ---@param terminal table
@@ -1250,8 +1436,8 @@ local function ensure_monitor_session(runtime)
         side = monitor_side,
         text_scale = text_scale,
         terminal = opened.value.terminal,
-        width = opened.value.width or 20,
-        height = opened.value.height or 12,
+        width = math.max(MIN_MONITOR_WIDTH, opened.value.width or 20),
+        height = math.max(MIN_MONITOR_HEIGHT, opened.value.height or 12),
         id = opened.value.id,
         last_lines = nil,
         last_progress_signature = nil,
@@ -1273,6 +1459,7 @@ local function render_monitor(runtime)
     local height = session.height
     runtime.monitor_id = session.id
     runtime.monitor_touch_targets = nil
+    runtime.monitor_top_bar = nil
     local page = current_page(runtime)
     local lines = nil
     if page == "cancelled" then
@@ -1290,24 +1477,42 @@ local function render_monitor(runtime)
     end
 
     local previous_lines = session.last_lines or {}
+    local top_bar_signature = nil
+    if type(runtime.monitor_top_bar) == "table" then
+        top_bar_signature = tostring(runtime.monitor_top_bar.line)
+            .. "|"
+            .. tostring(runtime.monitor_top_bar.mode_x)
+            .. "|"
+            .. tostring(runtime.monitor_top_bar.mode_width)
+            .. "|"
+            .. tostring(runtime.monitor_top_bar.mode_available)
+    end
     if page == "incoming_connected" or page == "incoming_alert" then
         for row = 1, height do
             local line = lines[row] or ""
-            if previous_lines[row] ~= line then
+            if row == 1 then
+                if previous_lines[row] ~= line or session.last_top_bar_signature ~= top_bar_signature then
+                    write_monitor_top_bar_line(terminal, width, row, runtime.monitor_top_bar)
+                end
+            elseif previous_lines[row] ~= line then
                 write_monitor_incoming_connected_line(terminal, width, row, line)
             end
         end
     else
         for row = 1, height do
             local line = lines[row] or ""
-            if previous_lines[row] ~= line then
+            if row == 1 then
+                if previous_lines[row] ~= line or session.last_top_bar_signature ~= top_bar_signature then
+                    write_monitor_top_bar_line(terminal, width, row, runtime.monitor_top_bar)
+                end
+            elseif previous_lines[row] ~= line then
                 write_monitor_line(terminal, width, row, line)
             end
         end
     end
 
     local progress_signature = nil
-    if page == "dialing_out" then
+    if page == "dialing_out" or page == "outgoing_connected" then
         local address = target_address(runtime)
         local engaged_progress = engaged_outgoing_progress(runtime, address)
         local highlight = outgoing_progress_highlight(runtime, address, engaged_progress)
@@ -1331,6 +1536,7 @@ local function render_monitor(runtime)
 
     session.last_lines = tablex.deep_copy(lines)
     session.last_progress_signature = progress_signature
+    session.last_top_bar_signature = top_bar_signature
 end
 
 ---@param runtime table
@@ -1632,7 +1838,8 @@ local function handle_input(runtime, logger, line)
     end
 
     if input == "help" then
-        print_terminal_feedback(runtime, "Commands: <number|name>, mode <auto|fast|medium|slow>, refresh, help")
+        ui_term.print_command_help(INTERACTIVE_TERMINAL_COMMAND_SPECS)
+        render_monitor(runtime)
         return
     end
 
@@ -1813,9 +2020,8 @@ end
 
 ---@param runtime table
 local function print_terminal_intro(runtime)
-    ui_term.header("Dial Console")
+    ui_term.console_header(INTERACTIVE_TERMINAL_COMMAND_SPECS, fallback_terminal_label(runtime.config))
     print("Enter destination number or exact name.")
-    print("Commands: mode <auto|fast|medium|slow>, refresh, help")
     print("Monitor shows live gate status.")
     print("")
 end
@@ -1831,7 +2037,10 @@ local function input_loop(runtime, logger)
             return
         end
 
-        if os ~= nil and type(os.queueEvent) == "function" then
+        if trim(input.value) == "help" then
+            ui_term.show_help_screen(INTERACTIVE_TERMINAL_COMMAND_SPECS, fallback_terminal_label(runtime.config))
+            print_terminal_intro(runtime)
+        elseif os ~= nil and type(os.queueEvent) == "function" then
             os.queueEvent(INPUT_EVENT, input.value)
         else
             handle_input(runtime, logger, input.value)
@@ -1969,105 +2178,6 @@ end
 ---@param config table
 ---@param logger table?
 ---@return SgcResult
-local function start_legacy(config, logger)
-    local opened = transport.open(config.modems.site)
-    if not opened.ok then
-        return opened
-    end
-
-    local cached = address_book_client.start(config)
-    if not cached.ok or cached.value.book == nil then
-        return finish_without_crash(config, "Address Book Unavailable", {
-            "Error: " .. tostring(cached.error),
-        })
-    end
-
-    if cached.value.error ~= nil and cached.value.book == nil then
-        return finish_without_crash(config, "Address Book Unavailable", {
-            "Error: " .. tostring(cached.value.error),
-        })
-    end
-
-    local destinations = visible_destinations(cached.value.book, config.site)
-    if #destinations == 0 then
-        return finish_without_crash(config, "No Destinations", {
-            "Site: " .. tostring(config.site),
-            "Address book loaded",
-            "No visible destinations",
-        })
-    end
-
-    ui_term.header("Dial Console")
-    for index, destination in ipairs(destinations) do
-        print(string.format("%d. %s", index, destination.name))
-    end
-    print("")
-
-    local selected = read_line("Destination number or name: ")
-    if not selected.ok then
-        return selected
-    end
-
-    local destination = resolve_destination_selection(cached.value.book, selected.value, config.site)
-    if not destination.ok then
-        return destination
-    end
-
-    local mode_input = read_line("Dial mode [auto/fast/medium/slow] (default auto): ")
-    if not mode_input.ok then
-        return mode_input
-    end
-
-    local dial_mode = trim(mode_input.value)
-    if dial_mode == "" then
-        dial_mode = constants.DEFAULT_DIAL_MODE
-    end
-    if not constants.DIAL_MODE_SET[dial_mode] then
-        return result.err("unsupported_dial_mode", {
-            dial_mode = dial_mode,
-        })
-    end
-
-    local sent = command_network.broadcast_command(config, command_message.build_site_request_payload(config.site, {
-        action = "dial",
-        destination_site = destination.value.id,
-        dial_mode = dial_mode,
-    }))
-    if not sent.ok then
-        return sent
-    end
-
-    local waited =
-        command_network.wait_for_result(config, sent.value.msg_id, command_timeout.for_action("dial"), {
-            logger = logger,
-            inbox = net_inbox.new(),
-        })
-    if not waited.ok then
-        return waited
-    end
-
-    local remote_result = normalize_remote_result(waited.value.payload)
-    if remote_result.ok then
-        return result.ok({
-            destination_site = destination.value.id,
-            dial_mode_requested = dial_mode,
-            dial_mode_used = remote_result.value.dial_mode_used,
-            state = remote_result.value.state,
-        })
-    end
-
-    return result.ok({
-        destination_site = destination.value.id,
-        dial_mode_requested = dial_mode,
-        failed = true,
-        error = remote_result.error,
-        details = remote_result.details,
-    })
-end
-
----@param config table
----@param logger table?
----@return SgcResult
 function dial_console.start(config, logger)
     if parallel == nil
         or type(parallel.waitForAny) ~= "function"
@@ -2075,7 +2185,13 @@ function dial_console.start(config, logger)
         or type(os.pullEvent) ~= "function"
         or type(os.queueEvent) ~= "function"
     then
-        return start_legacy(config, logger)
+        return result.err("unsupported_environment", {
+            requires = {
+                "parallel.waitForAny",
+                "os.pullEvent",
+                "os.queueEvent",
+            },
+        })
     end
 
     return start_interactive(config, logger)

@@ -22,7 +22,7 @@ local transport = require("net.rednet_transport")
 local alarm_controller = {}
 local DEFAULT_POLL_INTERVAL_MS = 250
 local SOURCE_STALE_MS = 5000
-local ACTIVE_DIAL_STALE_MS = 30000
+local MIN_ACTIVE_DIAL_STALE_MS = 180000
 local RAW_GATE_EVENT_TO_SIGNAL = {
     stargate_chevron_engaged = "chevron_engaged",
     stargate_incoming_wormhole = "wormhole_incoming",
@@ -153,6 +153,16 @@ local function gate_transition_active(gate_state)
         and gate_state.open ~= true
 end
 
+---@param gate_state SgcGateState?
+---@return integer
+local function stale_timeout_ms(gate_state)
+    if gate_transition_active(gate_state) then
+        return math.max(constants.DEFAULT_DIAL_COMMAND_TIMEOUT_SECONDS * 1000, MIN_ACTIVE_DIAL_STALE_MS)
+    end
+
+    return SOURCE_STALE_MS
+end
+
 ---@param delay_ms integer
 local function sleep_ms(delay_ms)
     if type(sleep) == "function" and delay_ms > 0 then
@@ -224,7 +234,7 @@ local function evaluate_runtime(runtime, logger)
     local site_fault = runtime.last_site_fault
     local gate_state = runtime.last_gate_state
     local site_status = runtime.last_site_status
-    local stale_ms = gate_transition_active(gate_state) and ACTIVE_DIAL_STALE_MS or SOURCE_STALE_MS
+    local stale_ms = stale_timeout_ms(gate_state)
 
     if gate_state == nil then
         gate_fault = gate_fault or "missing_gate_state"

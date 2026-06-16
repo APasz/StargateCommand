@@ -176,6 +176,8 @@ What bootstrap does:
 4. Writes update state to `/sgc/state/update_state.lua`.
 5. Continues booting using the newly downloaded runtime.
 
+On that first runtime boot, the computer label is set to `<site_id>.<role>`.
+
 The generated config is a valid full config, not just an `update` block. If you already had a partial `config.lua`, bootstrap reuses what it can and fills in the missing defaults.
 
 If you are using an address book cache path like `/sgc/cache/address_book.lua` or the default authoritative path `/sgc/data/address_book.json`, create the parent directories before first save if your deployment process does not already do that.

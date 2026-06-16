@@ -3,6 +3,7 @@ local editor = require("address_book.editor")
 local store = require("address_book.store")
 local constants = require("core.constants")
 local tablex = require("core.tablex")
+local ui_term = require("ui.term")
 local validate = require("core.validate")
 local address_book_message = require("address_book.message")
 local address_book_network = require("address_book.network")
@@ -27,21 +28,7 @@ end
 
 ---@return string
 local function default_updated_by()
-    if type(os) == "table" and type(os.getComputerLabel) == "function" then
-        local ok, label = pcall(os.getComputerLabel)
-        if ok and type(label) == "string" and label ~= "" then
-            return label
-        end
-    end
-
-    if type(computer) == "table" and type(computer.getLabel) == "function" then
-        local ok, label = pcall(computer.getLabel)
-        if ok and type(label) == "string" and label ~= "" then
-            return label
-        end
-    end
-
-    return file_stem(constants.DEFAULT_ADDRESS_BOOK_SERVER_PATH)
+    return ui_term.current_computer_label(file_stem(constants.DEFAULT_ADDRESS_BOOK_SERVER_PATH))
 end
 
 ---@param message string
@@ -495,14 +482,40 @@ local COMMAND_HANDLERS = {
     push = push_book,
 }
 
+local COMMAND_SPECS = {
+    {
+        summary = "help",
+        description = "Show available commands",
+    },
+    {
+        summary = "list",
+        description = "List sites in the address book",
+    },
+    {
+        summary = "add <site_id>",
+        description = "Create a new site entry",
+    },
+    {
+        summary = "edit <site_id>",
+        description = "Edit an existing site entry",
+    },
+    {
+        summary = "del <site_id>",
+        description = "Delete an existing site entry",
+    },
+    {
+        summary = "push",
+        description = "Broadcast the latest address book revision",
+    },
+}
+
 local function print_help()
-    print("Commands:")
-    print("  list")
-    print("  add <site_id>")
-    print("  edit <site_id>")
-    print("  del <site_id>")
-    print("  push")
-    print("  help")
+    ui_term.show_help_screen(COMMAND_SPECS, file_stem(constants.DEFAULT_ADDRESS_BOOK_SERVER_PATH))
+end
+
+local function print_console_home()
+    ui_term.console_header(COMMAND_SPECS, file_stem(constants.DEFAULT_ADDRESS_BOOK_SERVER_PATH))
+    print("Address book console ready.")
 end
 
 ---@param line string
@@ -520,7 +533,7 @@ end
 ---@param runtime table
 ---@param logger table
 function console.run(config, runtime, logger)
-    print("Address book console ready. Type 'help' for commands.")
+    print_console_home()
 
     while true do
         write("address-book> ")
@@ -530,11 +543,11 @@ function console.run(config, runtime, logger)
         if command == nil then
         elseif command == "help" then
             print_help()
+            print_console_home()
         else
             local handler = COMMAND_HANDLERS[command]
             if handler == nil then
                 print_error("unknown command: " .. tostring(command))
-                print_help()
             else
                 handler(config, runtime, logger, parts[2])
             end
