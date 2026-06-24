@@ -54,8 +54,9 @@ function client.save_cached(config, book)
 end
 
 ---@param config table
+---@param options table?
 ---@return SgcResult
-function client.fetch_remote(config)
+function client.fetch_remote(config, options)
     local transport_side = resolve_transport_side(config)
     local opened = transport.open(transport_side)
     if not opened.ok then
@@ -85,7 +86,12 @@ function client.fetch_remote(config)
         return request
     end
 
-    local received = address_book_network.wait_for_result(config, request.value.msg_id, constants.DEFAULT_COMMAND_TIMEOUT_SECONDS)
+    local received = address_book_network.wait_for_result(
+        config,
+        request.value.msg_id,
+        constants.DEFAULT_COMMAND_TIMEOUT_SECONDS,
+        options
+    )
     if not received.ok then
         dump_snapshot(config, {
             status = "unavailable",
@@ -142,8 +148,9 @@ function client.fetch_remote(config)
 end
 
 ---@param config table
+---@param options table?
 ---@return SgcResult
-function client.start(config)
+function client.start(config, options)
     if config.address_book.mode == "disabled" then
         dump_snapshot(config, {
             status = "disabled",
@@ -156,7 +163,7 @@ function client.start(config)
     end
 
     if config.address_book.server_site ~= nil then
-        local fetched = client.fetch_remote(config)
+        local fetched = client.fetch_remote(config, options)
         if fetched.ok then
             dump_snapshot(config, {
                 status = "available",

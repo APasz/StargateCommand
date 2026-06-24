@@ -10,7 +10,6 @@
 ---| "alarm_controller"
 ---| "energy_controller"
 ---| "address_book"
----| "address_book_server"
 ---| "update_client"
 ---| "bridge"
 

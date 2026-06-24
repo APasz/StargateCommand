@@ -24,7 +24,7 @@ Core ownership rules:
 - `iris_controller`: logical iris control service
 - `alarm_controller`: local alarm and redstone outputs
 - `energy_controller`: optional readiness checks
-- `address_book_server`: authoritative address book service
+- `address_book`: authoritative address book service
 - `update_client`: reserved for future HTTP update pulls
 - `bridge`: reserved protocol space for later integrations
 
@@ -53,7 +53,7 @@ The current scaffolding includes allowlist hooks and auth extension points, but 
 
 The address book is treated as live in-game state, not GitHub-managed content.
 
-- One `address_book_server` is authoritative
+- One `address_book` service is authoritative
 - The authoritative source of truth defaults to `/sgc/data/address_book.json`
 - Site controllers cache the latest revision locally
 - Sites prefer the central service when reachable

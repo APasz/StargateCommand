@@ -3820,7 +3820,7 @@ rednet = {
                 local dynamic_reply = envelope.reply(
                     request_envelope,
                     "command",
-                    "address_book_server",
+                    "address_book",
                     address_book_message.build_book_result(request_id, result.ok(validation.value))
                 )
                 if not dynamic_reply.ok then
@@ -5189,5 +5189,306 @@ do
 end
 end
 check_section_14()
+
+local function check_section_15()
+do
+    local deprecated_role_config = config_defaults.for_role("address_book_server")
+    local deprecated_role_validation = config_schema.validate(deprecated_role_config)
+    if deprecated_role_validation.ok then
+        io.stderr:write("Deprecated address book server role should fail validation\n")
+        os.exit(1)
+    end
+end
+end
+check_section_15()
+
+local function check_section_16()
+do
+    local original_fs = fs
+    local original_http = http
+    local original_textutils = textutils
+    local update_state_store = require("update.store")
+    local original_update_store_save = update_state_store.save
+
+    local files = {
+        ["startup.lua"] = "old-startup",
+        ["src/obsolete.lua"] = "obsolete-file",
+    }
+    local directories = {
+        ["/"] = true,
+        ["src"] = true,
+    }
+
+    local function normalize_path(path)
+        local normalized = tostring(path or ""):gsub("\\", "/")
+        normalized = normalized:gsub("/+", "/")
+        if normalized == "" or normalized == "." then
+            return "."
+        end
+        if normalized:sub(1, 2) == "./" then
+            normalized = normalized:sub(3)
+        end
+        if normalized:sub(-1) == "/" and #normalized > 1 then
+            normalized = normalized:sub(1, -2)
+        end
+        return normalized
+    end
+
+    local function parent_path(path)
+        local normalized = normalize_path(path)
+        return normalized:match("^(.*)/[^/]+$")
+    end
+
+    local function ensure_directory(path)
+        local normalized = normalize_path(path)
+        if normalized == "" or normalized == "." then
+            directories["."] = true
+            return
+        end
+
+        local parent = parent_path(normalized)
+        if parent ~= nil and parent ~= normalized then
+            ensure_directory(parent)
+        end
+        directories[normalized] = true
+    end
+
+    ensure_directory(".")
+    ensure_directory("src")
+
+    local function path_exists(path)
+        local normalized = normalize_path(path)
+        return files[normalized] ~= nil or directories[normalized] == true
+    end
+
+    local function list_entries(path)
+        local normalized = normalize_path(path)
+        local prefix = normalized == "." and "" or (normalized .. "/")
+        local seen = {}
+
+        for file_path in pairs(files) do
+            if prefix == "" or file_path:sub(1, #prefix) == prefix then
+                local suffix = prefix == "" and file_path or file_path:sub(#prefix + 1)
+                local child = suffix:match("^[^/]+")
+                if child ~= nil and child ~= "" then
+                    seen[child] = true
+                end
+            end
+        end
+
+        for directory_path in pairs(directories) do
+            if directory_path ~= normalized and (prefix == "" or directory_path:sub(1, #prefix) == prefix) then
+                local suffix = prefix == "" and directory_path or directory_path:sub(#prefix + 1)
+                local child = suffix:match("^[^/]+")
+                if child ~= nil and child ~= "" then
+                    seen[child] = true
+                end
+            end
+        end
+
+        local entries = {}
+        for child in pairs(seen) do
+            entries[#entries + 1] = child
+        end
+        table.sort(entries)
+        return entries
+    end
+
+    local function remove_path(path)
+        local normalized = normalize_path(path)
+        files[normalized] = nil
+        directories[normalized] = nil
+        local prefix = normalized .. "/"
+        for file_path in pairs(files) do
+            if file_path:sub(1, #prefix) == prefix then
+                files[file_path] = nil
+            end
+        end
+        for directory_path in pairs(directories) do
+            if directory_path:sub(1, #prefix) == prefix then
+                directories[directory_path] = nil
+            end
+        end
+    end
+
+    fs = {
+        combine = function(left, right)
+            local normalized_left = normalize_path(left)
+            local normalized_right = normalize_path(right)
+            if normalized_left == "." then
+                return normalized_right
+            end
+            return normalize_path(normalized_left .. "/" .. normalized_right)
+        end,
+        exists = function(path)
+            return path_exists(path)
+        end,
+        isDir = function(path)
+            return directories[normalize_path(path)] == true
+        end,
+        list = function(path)
+            return list_entries(path)
+        end,
+        open = function(path, mode)
+            local normalized = normalize_path(path)
+            if mode == "r" or mode == "rb" then
+                local content = files[normalized]
+                if content == nil then
+                    return nil
+                end
+
+                return {
+                    readAll = function()
+                        return content
+                    end,
+                    close = function()
+                    end,
+                }
+            end
+
+            if mode == "w" or mode == "wb" then
+                local buffer = {}
+                return {
+                    write = function(chunk)
+                        buffer[#buffer + 1] = chunk
+                    end,
+                    close = function()
+                        local parent = parent_path(normalized)
+                        if parent ~= nil then
+                            ensure_directory(parent)
+                        end
+                        files[normalized] = table.concat(buffer)
+                    end,
+                }
+            end
+
+            return nil
+        end,
+        makeDir = function(path)
+            ensure_directory(path)
+        end,
+        move = function(from_path, to_path)
+            local normalized_from = normalize_path(from_path)
+            local normalized_to = normalize_path(to_path)
+            local content = files[normalized_from]
+            if content == nil then
+                error("missing file: " .. normalized_from)
+            end
+
+            local parent = parent_path(normalized_to)
+            if parent ~= nil then
+                ensure_directory(parent)
+            end
+            files[normalized_to] = content
+            files[normalized_from] = nil
+            return true
+        end,
+        delete = function(path)
+            remove_path(path)
+            return true
+        end,
+        getSize = function(path)
+            local content = files[normalize_path(path)]
+            if content == nil then
+                return 0
+            end
+            return #content
+        end,
+    }
+
+    local manifest_payload = "manifest-payload"
+    local startup_payload = "new-startup"
+    local main_payload = "main-file"
+    http = {
+        get = function(url, _headers, _binary)
+            local payload = nil
+            if url == "http://mirror/v1/channels/stable/manifest.json" then
+                payload = manifest_payload
+            elseif url == "http://mirror/v1/channels/stable/files/startup.lua" then
+                payload = startup_payload
+            elseif url == "http://mirror/v1/channels/stable/files/src/main.lua" then
+                payload = main_payload
+            else
+                return nil, "unexpected url"
+            end
+
+            return {
+                readAll = function()
+                    return payload
+                end,
+                close = function()
+                end,
+            }
+        end,
+    }
+
+    textutils = {
+        unserializeJSON = function(payload)
+            if payload ~= manifest_payload then
+                return nil
+            end
+
+            return {
+                schema = 1,
+                channel = "stable",
+                source_kind = "workspace",
+                revision = "abcdef1234567890",
+                display_version = "Babcdef1",
+                generated_at = "2026-01-01T00:00:00Z",
+                managed_paths = {
+                    "startup.lua",
+                    "src/",
+                },
+                files = {
+                    {
+                        path = "startup.lua",
+                        size = #startup_payload,
+                        sha256 = string.rep("a", 64),
+                    },
+                    {
+                        path = "src/main.lua",
+                        size = #main_payload,
+                        sha256 = string.rep("b", 64),
+                    },
+                },
+            }
+        end,
+    }
+
+    update_state_store.save = function(_path, _state)
+        return result.err("update_state_save_failed", {
+            path = "/sgc/state/update.lua",
+        })
+    end
+
+    local update_result = require("services.update_client").start({
+        update = {
+            mode = "apply",
+            base_url = "http://mirror",
+            channel = "stable",
+            state_path = "/sgc/state/update.lua",
+            temp_dir = "/tmp/update",
+        },
+    })
+
+    fs = original_fs
+    http = original_http
+    textutils = original_textutils
+    update_state_store.save = original_update_store_save
+
+    if update_result.ok
+        or update_result.error ~= "update_state_save_failed"
+        or type(update_result.details) ~= "table"
+        or update_result.details.rolled_back ~= true
+        or files["startup.lua"] ~= "old-startup"
+        or files["src/obsolete.lua"] ~= "obsolete-file"
+        or files["src/main.lua"] ~= nil
+    then
+        io.stderr:write("Update rollback after state save failure failed\n")
+        os.exit(1)
+    end
+end
+end
+check_section_16()
 
 print(string.format("Checked %d Lua files", #files))

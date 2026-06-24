@@ -9,7 +9,7 @@ Suggested deployments are intentionally modular.
 - one or more `dial_console` computers
 - optional `veto_console`
 - optional `display` computers on monitors
-- optional dedicated `address_book_server`
+- optional dedicated `address_book`
 
 ## Small Outpost
 
@@ -24,4 +24,3 @@ Keep hardware ownership narrow:
 - gate hardware belongs to the gate controller
 - policy decisions belong to the site controller
 - user interaction belongs to console and display roles
-

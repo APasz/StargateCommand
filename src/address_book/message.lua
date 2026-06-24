@@ -12,7 +12,6 @@ function message.validate_get_book_request(payload)
     net_message.validate_routed_payload(payload, errors, "get_book", {
         site_controller = true,
         address_book = true,
-        address_book_server = true,
     }, true)
 
     local validation = validate.result(errors)

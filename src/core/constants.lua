@@ -156,7 +156,6 @@ local constants = {
         "gate_controller",
         "dial_console",
         "alarm_controller",
-        "address_book_server",
         "address_book",
     },
     ROLE_SET = {
@@ -169,7 +168,6 @@ local constants = {
         alarm_controller = true,
         energy_controller = true,
         address_book = true,
-        address_book_server = true,
         update_client = true,
         bridge = true,
     },
@@ -183,7 +181,6 @@ local constants = {
         alarm_controller = "apps.alarm_controller",
         energy_controller = "apps.energy_controller",
         address_book = "apps.address_book_server",
-        address_book_server = "apps.address_book_server",
         update_client = "apps.update_client",
         bridge = "apps.bridge",
     },

@@ -21,6 +21,22 @@ local function dirname(path)
     return normalized:match("^(.*)/[^/]+$")
 end
 
+---@param left string
+---@param right string
+---@return string
+local function combine_path(left, right)
+    if fs ~= nil and type(fs.combine) == "function" then
+        return fs.combine(left, right)
+    end
+
+    local normalized_left = left:gsub("\\", "/")
+    if normalized_left:sub(-1) == "/" then
+        return normalized_left .. right
+    end
+
+    return normalized_left .. "/" .. right
+end
+
 ---@param raw_url string
 ---@return string
 local function strip_trailing_slashes(raw_url)
@@ -125,6 +141,27 @@ local function write_binary_file(path, content)
     return result.ok(true)
 end
 
+---@param from_path string
+---@param to_path string
+---@return SgcResult
+local function move_path(from_path, to_path)
+    local parent_result = ensure_parent_dir(to_path)
+    if not parent_result.ok then
+        return parent_result
+    end
+
+    local ok, move_error = pcall(fs.move, from_path, to_path)
+    if not ok then
+        return result.err("update_move_failed", {
+            from = from_path,
+            to = to_path,
+            cause = tostring(move_error),
+        })
+    end
+
+    return result.ok(true)
+end
+
 ---@param path string
 ---@return SgcResult
 local function delete_path(path)
@@ -160,6 +197,13 @@ local function reset_directory(path)
     end
 
     return result.ok(true)
+end
+
+---@param temp_dir string
+---@param file_path string
+---@return string
+local function backup_path_for(temp_dir, file_path)
+    return combine_path(combine_path(temp_dir, "backup"), file_path)
 end
 
 ---@param root_path string
@@ -395,7 +439,7 @@ end
 ---@param logger table
 ---@return SgcResult
 local function stage_downloads(update_config, downloads, logger)
-    local stage_root = fs.combine(update_config.temp_dir, "files")
+    local stage_root = combine_path(update_config.temp_dir, "files")
     local prepared = reset_directory(update_config.temp_dir)
     if not prepared.ok then
         return prepared
@@ -447,41 +491,108 @@ local function stage_downloads(update_config, downloads, logger)
     return result.ok(downloaded)
 end
 
+---@param transaction table
+---@return SgcResult
+local function rollback_applied_files(transaction)
+    local failures = {}
+
+    for _, applied_path in ipairs(transaction.applied_paths) do
+        local deleted = delete_path(applied_path)
+        if not deleted.ok then
+            failures[#failures + 1] = {
+                path = applied_path,
+                error = deleted.error,
+                details = deleted.details,
+            }
+        end
+    end
+
+    for index = #transaction.restore_entries, 1, -1 do
+        local restore_entry = transaction.restore_entries[index]
+        local restored = move_path(restore_entry.backup_path, restore_entry.live_path)
+        if not restored.ok then
+            failures[#failures + 1] = {
+                path = restore_entry.live_path,
+                error = restored.error,
+                details = restored.details,
+            }
+        end
+    end
+
+    if #failures > 0 then
+        return result.err("update_rollback_failed", {
+            failures = failures,
+        })
+    end
+
+    return result.ok(true)
+end
+
+---@param operation SgcResult
+---@param transaction table
+---@return SgcResult
+local function rollback_operation_failure(operation, transaction)
+    local rolled_back = rollback_applied_files(transaction)
+    if not rolled_back.ok then
+        return result.err("update_apply_rollback_failed", {
+            operation_error = operation.error,
+            operation_details = operation.details,
+            rollback_error = rolled_back.error,
+            rollback_details = rolled_back.details,
+        })
+    end
+
+    operation.details = operation.details or {}
+    operation.details.rolled_back = true
+    return operation
+end
+
+---@param temp_dir string
 ---@param staged_files table[]
 ---@param deletes string[]
 ---@return SgcResult
-local function apply_staged_files(staged_files, deletes)
+local function apply_staged_files(temp_dir, staged_files, deletes)
+    local transaction = {
+        applied_paths = {},
+        restore_entries = {},
+    }
+
     for _, file_path in ipairs(deletes) do
-        local deleted = delete_path(file_path)
-        if not deleted.ok then
-            return deleted
+        if path_exists(file_path) then
+            local backed_up = move_path(file_path, backup_path_for(temp_dir, file_path))
+            if not backed_up.ok then
+                return rollback_operation_failure(backed_up, transaction)
+            end
+
+            transaction.restore_entries[#transaction.restore_entries + 1] = {
+                backup_path = backup_path_for(temp_dir, file_path),
+                live_path = file_path,
+            }
         end
     end
 
     for _, staged_file in ipairs(staged_files) do
-        local ensured = ensure_parent_dir(staged_file.path)
-        if not ensured.ok then
-            return ensured
-        end
-
         if path_exists(staged_file.path) then
-            local deleted = delete_path(staged_file.path)
-            if not deleted.ok then
-                return deleted
+            local backed_up = move_path(staged_file.path, backup_path_for(temp_dir, staged_file.path))
+            if not backed_up.ok then
+                return rollback_operation_failure(backed_up, transaction)
             end
+
+            transaction.restore_entries[#transaction.restore_entries + 1] = {
+                backup_path = backup_path_for(temp_dir, staged_file.path),
+                live_path = staged_file.path,
+            }
         end
 
-        local ok, move_error = pcall(fs.move, staged_file.stage_path, staged_file.path)
-        if not ok then
-            return result.err("update_move_failed", {
-                from = staged_file.stage_path,
-                to = staged_file.path,
-                cause = tostring(move_error),
-            })
+        local moved = move_path(staged_file.stage_path, staged_file.path)
+        if not moved.ok then
+            return rollback_operation_failure(moved, transaction)
         end
+
+        transaction.applied_paths[#transaction.applied_paths + 1] = staged_file.path
     end
 
-    return result.ok(true)
+    return result.ok(transaction)
 end
 
 ---@param update_config SgcUpdateConfig
@@ -550,13 +661,26 @@ local function run_sync(update_config, manifest, state, logger)
         return staged
     end
 
-    local applied = apply_staged_files(staged.value, plan.deletes)
+    local applied = apply_staged_files(update_config.temp_dir, staged.value, plan.deletes)
     if not applied.ok then
         return applied
     end
 
     local state_result = update_store.save(update_config.state_path, planner.build_state(manifest))
     if not state_result.ok then
+        local rolled_back = rollback_applied_files(applied.value)
+        if not rolled_back.ok then
+            return result.err("update_state_save_rollback_failed", {
+                state_error = state_result.error,
+                state_details = state_result.details,
+                rollback_error = rolled_back.error,
+                rollback_details = rolled_back.details,
+            })
+        end
+
+        delete_path(update_config.temp_dir)
+        state_result.details = state_result.details or {}
+        state_result.details.rolled_back = true
         return state_result
     end
 
@@ -612,6 +736,7 @@ local function execute_update(config, logger)
         or type(fs.list) ~= "function"
         or type(fs.open) ~= "function"
         or type(fs.makeDir) ~= "function"
+        or type(fs.combine) ~= "function"
         or type(fs.move) ~= "function"
         or type(fs.delete) ~= "function"
     then

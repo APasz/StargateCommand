@@ -6,7 +6,7 @@ local defaults = {}
 ---@param role SgcRole
 ---@return boolean
 local function is_address_book_role(role)
-    return role == "address_book" or role == "address_book_server"
+    return role == "address_book"
 end
 
 ---@param role SgcRole

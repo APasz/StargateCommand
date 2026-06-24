@@ -12,7 +12,7 @@ StargateCommand is organized around logical services, not around individual comp
 - `iris_controller` owns iris actions when separated from gate control
 - `alarm_controller` owns alarm outputs
 - `energy_controller` owns readiness checks
-- `address_book_server` owns the authoritative address book
+- `address_book` owns the authoritative address book
 
 ## Deployment Rule
 
@@ -30,4 +30,3 @@ This foundation stage implements:
 - role-based app dispatch
 
 It does not yet implement a full dialing workflow or production UI.
-

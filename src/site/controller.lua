@@ -27,8 +27,10 @@ local GATE_CONTACT_FRESH_MS = 5000
 local SITE_STATE_POLL_INTERVAL_SECONDS = 0.25
 local ADMIN_INPUT_POLL_INTERVAL_SECONDS = 0.05
 local SITE_STATUS_HEARTBEAT_INTERVAL_MS = 2000
+local ADDRESS_BOOK_RECOVERY_RETRY_INTERVAL_MS = 5000
 local HOST_REBOOT_ACK_TIMEOUT_SECONDS = 2
 local ADMIN_RESTART_INPUT_SIDE = "back"
+local current_warnings = nil
 local dispatch_incoming = nil
 local wait_for_gate_result = nil
 local NOOP_LOGGER = {
@@ -74,6 +76,16 @@ local function record_internal_error(runtime, source, operation)
     runtime.health.last_internal_error_source = source
 end
 
+---@param runtime table
+local function clear_internal_error(runtime)
+    if type(runtime.health) ~= "table" then
+        return
+    end
+
+    runtime.health.last_internal_error = nil
+    runtime.health.last_internal_error_source = nil
+end
+
 ---@param payload table?
 ---@param target_role SgcRole
 ---@param target_site string
@@ -107,7 +119,7 @@ end
 ---@param runtime table
 ---@return string?
 local function warning_summary(runtime)
-    local warning = type(runtime.warnings) == "table" and runtime.warnings[1] or nil
+    local warning = current_warnings(runtime)[1]
     if type(warning) ~= "table" then
         return nil
     end
@@ -189,20 +201,65 @@ local function resolve_restart_target_roles(runtime, request)
     end
 
     local discovered_roles = {}
+    for _, role in ipairs(constants.HOST_LIFECYCLE_ROLE_ORDER) do
+        discovered_roles[role] = true
+    end
+
     if type(runtime.discovered_services) == "table" then
         for role in pairs(runtime.discovered_services) do
             discovered_roles[role] = true
         end
     end
 
-    if next(discovered_roles) == nil then
-        for _, role in ipairs(constants.HOST_LIFECYCLE_ROLE_ORDER) do
-            discovered_roles[role] = true
-        end
-    end
-
     discovered_roles.site_controller = true
     return ordered_roles(discovered_roles)
+end
+
+---@param address_book_state table?
+---@return table?
+local function address_book_warning(address_book_state)
+    if type(address_book_state) ~= "table" or address_book_state.availability ~= "degraded" then
+        return nil
+    end
+
+    return {
+        error = "address_book_degraded",
+        details = {
+            fetch_error = address_book_state.fetch_error,
+            fetch_details = address_book_state.fetch_details,
+        },
+    }
+end
+
+---@param runtime table
+---@return table[]
+current_warnings = function(runtime)
+    local warnings = {}
+    local persistent_warnings = type(runtime.warnings) == "table" and runtime.warnings or {}
+    for index, warning in ipairs(persistent_warnings) do
+        warnings[index] = warning
+    end
+
+    local degraded_warning = address_book_warning(type(runtime.address_book) == "table" and runtime.address_book or nil)
+    if degraded_warning ~= nil then
+        warnings[#warnings + 1] = degraded_warning
+    end
+
+    return warnings
+end
+
+---@param address_book_state table?
+---@return string?
+local function current_address_book_error(address_book_state)
+    if type(address_book_state) ~= "table" then
+        return nil
+    end
+
+    if address_book_state.availability == "degraded" then
+        return address_book_state.fetch_error or "address_book_degraded"
+    end
+
+    return address_book_state.error
 end
 
 ---@param runtime table
@@ -236,14 +293,15 @@ local function build_site_status(config, runtime)
     local last_internal_error = runtime.health ~= nil and runtime.health.last_internal_error or nil
     local address_book_revision = address_book_available and address_book_state.book.revision or nil
     local maintenance = type(runtime.maintenance) == "table" and runtime.maintenance or nil
+    local warnings = current_warnings(runtime)
 
     return {
         site = config.site,
         role = config.role,
-        healthy = #(runtime.warnings or {}) == 0 and address_book_available and last_internal_error == nil,
-        warnings_count = #(runtime.warnings or {}),
+        healthy = #warnings == 0 and address_book_available and last_internal_error == nil,
+        warnings_count = #warnings,
         address_book_available = address_book_available,
-        address_book_error = address_book_state ~= nil and address_book_state.error or nil,
+        address_book_error = current_address_book_error(address_book_state),
         address_book_revision = address_book_revision,
         last_internal_error = last_internal_error,
         started_at = runtime.state ~= nil and runtime.state.started_at or nil,
@@ -292,6 +350,30 @@ local function publish_site_status(config, runtime, force)
     runtime.last_published_site_status = status
     runtime.last_site_status_publish_at = now_ms
     return result.ok(true)
+end
+
+---@param config table
+---@param runtime table
+---@return boolean
+local function address_book_recovery_needed(config, runtime)
+    if type(config.address_book) ~= "table" or config.address_book.server_site == nil then
+        return false
+    end
+
+    local address_book_state = type(runtime.address_book) == "table" and runtime.address_book or nil
+    if address_book_state ~= nil and address_book_state.availability == "available" and address_book_state.book ~= nil then
+        return false
+    end
+
+    local retry_state = type(runtime.address_book_recovery) == "table" and runtime.address_book_recovery or nil
+    if retry_state ~= nil
+        and type(retry_state.next_retry_at) == "number"
+        and time.now_ms() < retry_state.next_retry_at
+    then
+        return false
+    end
+
+    return true
 end
 
 ---@param config table
@@ -398,7 +480,7 @@ local function render_monitor(config, runtime)
         "Modem S:" .. (runtime.state.modems.site and "open" or "closed")
             .. " I:" .. (runtime.state.modems.intersite and "open" or "closed"),
         "Book " .. address_book_summary(runtime),
-        "Warn " .. tostring(#(runtime.warnings or {})),
+        "Warn " .. tostring(#current_warnings(runtime)),
         "Last " .. last_command_summary(runtime),
         warning_summary(runtime) ~= nil and ("W1 " .. tostring(warning_summary(runtime))) or "",
     }, {
@@ -408,6 +490,66 @@ local function render_monitor(config, runtime)
     if not rendered.ok then
         -- Monitor output is optional; do not fail startup or command handling if absent.
     end
+end
+
+---@param config table
+---@param runtime table
+---@return SgcResult
+local function recover_address_book(config, runtime)
+    if not address_book_recovery_needed(config, runtime) then
+        return result.ok({
+            refreshed = false,
+        })
+    end
+
+    runtime.address_book_recovery = runtime.address_book_recovery or {
+        next_retry_at = nil,
+    }
+    runtime.address_book_recovery.next_retry_at = time.now_ms() + ADDRESS_BOOK_RECOVERY_RETRY_INTERVAL_MS
+
+    local fetched = address_book_client.fetch_remote(config, {
+        inbox = runtime.inbox,
+    })
+    if not fetched.ok then
+        if type(runtime.address_book) == "table" and type(runtime.address_book.book) == "table" then
+            runtime.address_book.availability = "degraded"
+            runtime.address_book.fetch_error = fetched.error
+            runtime.address_book.fetch_details = fetched.details
+        else
+            runtime.address_book = {
+                mode = "client",
+                availability = "unavailable",
+                cache_loaded = false,
+                fetched_remote = false,
+                error = fetched.error,
+                details = fetched.details,
+            }
+        end
+
+        return result.ok({
+            refreshed = false,
+            error = fetched.error,
+        })
+    end
+
+    runtime.address_book = {
+        mode = "client",
+        availability = "available",
+        cache_loaded = false,
+        fetched_remote = true,
+        book = fetched.value,
+    }
+    runtime.address_book_recovery.next_retry_at = nil
+    render_monitor(config, runtime)
+    local published = publish_site_status(config, runtime, true)
+    if not published.ok then
+        return published
+    end
+
+    return result.ok({
+        refreshed = true,
+        revision = fetched.value.revision,
+    })
 end
 
 ---@param config table
@@ -463,6 +605,53 @@ local function poll_local_admin_inputs(config, runtime, logger)
 end
 
 ---@param config table
+---@param state table
+---@param opened_modems string[]
+---@param hello_message SgcEnvelope
+---@param address_book_state table?
+---@param warnings table[]
+---@return table
+local function new_runtime(config, state, opened_modems, hello_message, address_book_state, warnings)
+    return {
+        state = state,
+        opened_modems = opened_modems,
+        hello = hello_message,
+        address_book = address_book_state,
+        health = {
+            last_internal_error = nil,
+            internal_error_count = 0,
+            last_internal_error_source = nil,
+        },
+        warnings = warnings,
+        last_command = nil,
+        gate_contact = {
+            last_success_at = nil,
+            last_state = nil,
+            last_state_sequence = nil,
+        },
+        inbox = net_inbox.new(),
+        site_status_sequence = 0,
+        last_published_site_status = nil,
+        last_site_status_publish_at = nil,
+        maintenance = nil,
+        admin_inputs = {
+            restart_active = restart_input_active(),
+        },
+        address_book_recovery = {
+            next_retry_at = nil,
+        },
+        discovered_services = {
+            [config.role] = {
+                sender_id = os ~= nil and type(os.getComputerID) == "function" and os.getComputerID() or nil,
+                computer_id = os ~= nil and type(os.getComputerID) == "function" and os.getComputerID() or nil,
+                declared_role = config.role,
+                last_seen_at = time.now_ms(),
+            },
+        },
+    }
+end
+
+---@param config table
 ---@return SgcResult
 function controller.start(config)
     local state = site_state.new(config)
@@ -502,53 +691,14 @@ function controller.start(config)
 
     local address_book_state = address_book_client.start(config)
     record_warning(address_book_state, warnings)
-    if address_book_state.ok
-        and type(address_book_state.value) == "table"
-        and address_book_state.value.availability == "degraded"
-    then
-        warnings[#warnings + 1] = {
-            error = "address_book_degraded",
-            details = {
-                fetch_error = address_book_state.value.fetch_error,
-                fetch_details = address_book_state.value.fetch_details,
-            },
-        }
-    end
-
-    return result.ok({
-        state = state,
-        opened_modems = opened_modems,
-        hello = hello.value,
-        address_book = address_book_state.ok and address_book_state.value or nil,
-        health = {
-            last_internal_error = nil,
-            internal_error_count = 0,
-            last_internal_error_source = nil,
-        },
-        warnings = warnings,
-        last_command = nil,
-        gate_contact = {
-            last_success_at = nil,
-            last_state = nil,
-            last_state_sequence = nil,
-        },
-        inbox = net_inbox.new(),
-        site_status_sequence = 0,
-        last_published_site_status = nil,
-        last_site_status_publish_at = nil,
-        maintenance = nil,
-        admin_inputs = {
-            restart_active = restart_input_active(),
-        },
-        discovered_services = {
-            [config.role] = {
-                sender_id = os ~= nil and type(os.getComputerID) == "function" and os.getComputerID() or nil,
-                computer_id = os ~= nil and type(os.getComputerID) == "function" and os.getComputerID() or nil,
-                declared_role = config.role,
-                last_seen_at = time.now_ms(),
-            },
-        },
-    })
+    return result.ok(new_runtime(
+        config,
+        state,
+        opened_modems,
+        hello.value,
+        address_book_state.ok and address_book_state.value or nil,
+        warnings
+    ))
 end
 
 ---@param config table
@@ -737,6 +887,13 @@ function controller.handle_service_hello(config, runtime, incoming)
     end
 
     record_service_hello(runtime, incoming.sender_id, incoming.envelope)
+    if incoming.envelope.role == "address_book" then
+        local recovered = recover_address_book(config, runtime)
+        if not recovered.ok then
+            return recovered
+        end
+    end
+
     return result.ok({
         handled = true,
     })
@@ -969,13 +1126,16 @@ local function ensure_address_book_available(config, runtime)
         return result.ok(runtime.address_book.book)
     end
 
-    local fetched = address_book_client.fetch_remote(config)
+    local fetched = address_book_client.fetch_remote(config, {
+        inbox = runtime.inbox,
+    })
     if not fetched.ok then
         return fetched
     end
 
     runtime.address_book = {
         mode = "client",
+        availability = "available",
         cache_loaded = false,
         fetched_remote = true,
         book = fetched.value,
@@ -1227,12 +1387,22 @@ function controller.serve(config, logger)
         )
         if not received.ok then
             if received.error == "receive_timeout" then
+                local recovered = recover_address_book(config, runtime)
+                if not recovered.ok then
+                    active_logger:warn("address book recovery failed", {
+                        error = recovered.error,
+                        details = recovered.details,
+                    })
+                end
+
                 local heartbeat = publish_site_status(config, runtime, false)
                 if not heartbeat.ok then
                     active_logger:warn("site status heartbeat failed", {
                         error = heartbeat.error,
                         details = heartbeat.details,
                     })
+                else
+                    clear_internal_error(runtime)
                 end
             else
                 active_logger:error("site command receive failed", {
@@ -1256,6 +1426,9 @@ function controller.serve(config, logger)
                     protocol = received.value.protocol,
                     role = received.value.envelope.role,
                 })
+                clear_internal_error(runtime)
+            else
+                clear_internal_error(runtime)
             end
         end
     end
